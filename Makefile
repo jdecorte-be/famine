@@ -1,24 +1,44 @@
-NAME = pipex
+NAME = injection.exe
+FAMINE = famine.exe
 
 CC = gcc
-
+AS = nasm
 INCLUDES = include
+CFLAGS = -g #-Werror -Wall -Wextra #-fsanitize=address
+ASFLAGS = -f win64 -g
+DEL = del /Q
+SRCS = src\main.c src\woody.c
+ASMSRC = famine.s
+OBJS = $(SRCS:.c=.o)
+ASMOBJ = $(ASMSRC:.s=.obj)
 
-CFLAGS = -Werror -Wall -Wextra -fsanitize=address
+# Rule to generate object files from C source files
+%.o: %.c
+	$(CC) $(CFLAGS) -I $(INCLUDES) -c $< -o $@
 
-RM = rm -rf
+# Rule to generate object files from assembly source files
+%.obj: %.s
+	$(AS) $(ASFLAGS) $< -o $@
 
-SRCS = 	src/main.c
+# Main target to link the injection executable
+$(NAME): $(OBJS)
+	$(CC) $(CFLAGS) $(OBJS) -I $(INCLUDES) -o $(NAME)
 
-$(NAME) :
-	gcc $(CFLAGS) $(SRCS) -I $(INCLUDES) -o $(NAME)
+# Target to link the famine executable
+$(FAMINE): $(ASMOBJ)
+	$(CC) $(CFLAGS) $(ASMOBJ) -o $(FAMINE)
 
-all : $(NAME)
+all: $(NAME) $(FAMINE)
 
-fclean : clean
-	$(RM) $(NAME)
+# Clean object files and executables
+clean:
+	$(DEL) $(OBJS) $(ASMOBJ)
 
-clean :
-	$(RM) $(NAME)
+fclean: clean
+	$(DEL) $(NAME) $(FAMINE)
 
-re : fclean all
+# Rebuild everything
+re: fclean all
+
+# Declare these targets as phony to avoid filename conflicts
+.PHONY: all clean fclean re
