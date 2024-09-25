@@ -1,44 +1,51 @@
-NAME = injection.exe
-FAMINE = famine.exe
+NAME = famine.exe
 
-CC = gcc
-AS = nasm
-INCLUDES = include
-CFLAGS = -g #-Werror -Wall -Wextra #-fsanitize=address
-ASFLAGS = -f win64 -g
+CL = C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.41.34120\bin\HostX64\x64\CL.exe
+
+# Directories
+SRC_DIR = src
+OBJ_DIR = obj
+BIN_DIR = bin
+
+CLFLAGS = /c /Zi /nologo /W4 /diagnostics:column /O1 /Os /Oy /GL /GS- /Zc:inline /FA /external:W4 /TC /Zl
+LINKFLAGS = /OUT:"$(BIN_DIR)/$(NAME)" /LTCG:incremental /MACHINE:X64 /ENTRY:"Run" /OPT:REF /SAFESEH:NO /SUBSYSTEM:CONSOLE /LTCGOUT:"$(BIN_DIR)/$(NAME).iobj" /MAP:"$(BIN_DIR)/$(NAME).map" /ORDER:@"src\function_link_order.txt" /OPT:ICF /ILK:"$(BIN_DIR)/$(NAME).ilk" /NOLOGO /NODEFAULTLIB 
+
+SRCS = $(SRC_DIR)/woody.c 
+OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.obj,$(SRCS))
+
+# Commands
 DEL = del /Q
-SRCS = src\main.c src\woody.c
-ASMSRC = famine.s
-OBJS = $(SRCS:.c=.o)
-ASMOBJ = $(ASMSRC:.s=.obj)
+LINK = link
 
-# Rule to generate object files from C source files
-%.o: %.c
-	$(CC) $(CFLAGS) -I $(INCLUDES) -c $< -o $@
+# Rules
+all: dirs $(BIN_DIR)/$(NAME)
 
-# Rule to generate object files from assembly source files
-%.obj: %.s
-	$(AS) $(ASFLAGS) $< -o $@
+dirs:
+	@if not exist $(OBJ_DIR) mkdir $(OBJ_DIR)
+	@if not exist $(BIN_DIR) mkdir $(BIN_DIR)
 
-# Main target to link the injection executable
-$(NAME): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -I $(INCLUDES) -o $(NAME)
+$(OBJ_DIR)/%.obj: $(SRC_DIR)/%.c
+	@echo Compiling $<
+	$(CL) $(CLFLAGS) /Fo"$@" /Fa"$(BIN_DIR)/" $<
 
-# Target to link the famine executable
-$(FAMINE): $(ASMOBJ)
-	$(CC) $(CFLAGS) $(ASMOBJ) -o $(FAMINE)
+$(OBJ_DIR)/%.obj: $(SRC_DIR)/%.s
+	$(AS) $(ASFLAGS) /Fo"$@" $<
 
-all: $(NAME) $(FAMINE)
+$(BIN_DIR)/$(NAME): $(OBJS)
+	@echo Linking...
+	$(LINK) $(LINKFLAGS) $(OBJS)
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\script\Out-Shellcode.ps1 .\bin\famine.exe .\bin\famine.exe.map .\bin\famine.bin     
 
-# Clean object files and executables
+
 clean:
-	$(DEL) $(OBJS) $(ASMOBJ)
+	@if exist $(OBJ_DIR) $(DEL) $(OBJ_DIR)\*.*
 
 fclean: clean
-	$(DEL) $(NAME) $(FAMINE)
+	@if exist $(BIN_DIR) $(DEL) $(BIN_DIR)\*.*
 
-# Rebuild everything
 re: fclean all
 
-# Declare these targets as phony to avoid filename conflicts
-.PHONY: all clean fclean re
+.PHONY: all clean fclean re dirs
+
+
+#  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Out-Shellcode.ps1 ..\bin\famine.exe ..\bin\famine.exe.map ..\bin\famine.bin     

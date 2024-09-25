@@ -1,7 +1,5 @@
 NAME = famine.exe
 
-POWERSHELLINITVAR = $(powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\script\vcvars-powershell.ps1)
-
 AS = ml64
 CL = C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.41.34120\bin\HostX64\x64\CL.exe
 
@@ -36,12 +34,12 @@ $(OBJ_DIR)/%.obj: $(SRC_DIR)/%.c
 	$(CL) $(CLFLAGS) /Fo"$@" /Fa"$(BIN_DIR)/" $<
 
 $(OBJ_DIR)/%.obj: $(SRC_DIR)/%.s
-	@echo Compiling $<
 	$(AS) $(ASFLAGS) /Fo"$@" $<
 
 $(BIN_DIR)/$(NAME): $(OBJS)
 	@echo Linking...
 	$(LINK) $(LINKFLAGS) $(OBJS)
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\script\Out-Shellcode.ps1 .\bin\famine.exe .\bin\famine.exe.map .\bin\famine.bin
 
 clean:
 	@if exist $(OBJ_DIR) $(DEL) $(OBJ_DIR)\*.*

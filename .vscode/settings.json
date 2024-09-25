@@ -1,9 +1,6 @@
 {
     "files.associations": {
-        "pe.h": "c",
-        "stdlib.h": "c",
-        "windows.h": "c",
-        "stdio.h": "c",
-        "string.h": "c"
+        "winternl.h": "c",
+        "famine.h": "c"
     }
 }
