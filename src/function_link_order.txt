@@ -1,6 +1,6 @@
 Run
 GetProcAddressWithHash
-ft_memcpy
+memcpy
 align
 map_file
 read_pe_header

@@ -1,6 +1,0 @@
-{
-    "files.associations": {
-        "winternl.h": "c",
-        "famine.h": "c"
-    }
-}
