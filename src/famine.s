@@ -34,42 +34,39 @@
 
 [BITS 64]
 
-section .data
-    fileName db 'C:\\Users\\johnd\\Desktop\\famine\\famine', 0
-    findData times 592 db  ; WIN32_FIND_DATAW is 592 bytes
-	formatString db 'Found file: %s', 10, 0           ; Format string for printf (newline at the end)
-
 section .text
 
     global _famine
+    global _recursive_directory
 
     extern _get_proc_address
 	extern FindFirstFileA
-	extern printf
+    extern GetCurrentDirectoryA
+    extern GetProcAddressWithHash
 
 
 _recursive_directory:
-    lea rcx, [rel fileName]            ; File pattern (ANSI string, convert to wide in real use)
-    lea rdx, [rel findData]          ; Address of WIN32_FIND_DATA structure
-    call FindFirstFileA
 
 
-    lea rcx, [rel formatString] ; First parameter: Format string for printf
-    lea rdx, [findData + 44]    ; Second parameter: cFileName offset (44 bytes into the structure)
-    call printf                 ; Call printf to print the filename
+    ; mov rcx, 256
+    ; lea rdx, [rel hDir]
 
 
-	ret
-
-
-
-
-    
+    ; push r11
+    ; push r10
+    ; push rax
+    ; call GetCurrentDirectoryA
+    ; pop rax
+    ; pop r10
+    ; pop r11
+    ; ret
 
 
 _famine:
 
-	call _recursive_directory
+    
+	; call _recursive_directory
+
 
 
 

@@ -7,13 +7,44 @@
 ; - We resolve the addresses of the functions we need from kernel32.dll
 
 
+section .data
+    hello db 'Hello, World!', 0  
+    helloLen equ $ - hello        
+
+
 section .text
 	global start
 
-	extern _famine
-	extern _init_kernel32_address_table
-
+	extern _get_proc_address
+	extern GetStdHandle
+	extern WriteConsoleA
+	extern ExitProcess
 
 start:
-    call _init_kernel32_address_table
-	jmp _famine
+    push r12
+    mov rcx, 0x53CABB18
+    call _get_proc_address
+    pop r12
+    mov r10, rax
+
+    xor rax, rax
+    sub rsp, 28h               
+    mov rcx, -11
+    call r10
+
+    ; Escribir el mensaje en la consola
+    mov r9, 0                
+    mov r8, helloLen          
+    mov rdx, hello            
+    mov rcx, rax               
+    call WriteConsoleA        
+
+    ; Terminar el programa
+    mov rcx, 0                 
+    call ExitProcess   
+
+	; mov rcx, 0xB207C0C3
+	; call _get_proc_address
+	; ret
+
+
