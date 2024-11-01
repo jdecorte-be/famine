@@ -57,30 +57,38 @@ _get_proc_address:
 		; PWSTR  Buffer;				; 8 bytes
 		; } UNICODE_STRING, *PUNICODE_STRING;
 		add r9, 0x58               ; r9 = LDR_DATA_TABLE_ENTRY->BaseDllName
-		movzx r10, word [r9 + 0x2] ; r10 = BaseDllName.Length
+		movzx r10, word [r9 + 0x2] ; r10 = BaseDllName.MaximumLength
 		mov r11, [r9 + 0x8]			; r11 = address of BaseDllName.Buffer
 
-		xor rcx, rcx				; rcx = 0 / counter
 		xor rax, rax
 		xor r9, r9
 		xor rdx, rdx
-		.loop_hash_dll:
-			mov al, byte [r11 + rcx]	; al = BaseDllName.Buffer[rcx]
 
-			; to upper character
-			cmp al, 0x61 ; compare with 'a'
-			jl .next_char
-			sub al, 0x20 ; al = al - 32 / to upper
-			.next_char:
-
-			ror edx, 13 ; rdx = rdx >> 13
-			movzx rax, al ; rax = al
-			add rdx, rax ; rdx = rdx + rax
+		mov rcx, r11
+		mov rdx, r10
+		call .ror13_hash_dll ; rax = hash of dll
+		mov r11, rax
 
 
-			inc rcx
-			cmp rcx, r10
-			jnz .loop_hash_dll
+		; .loop_hash_dll:
+		; 	mov al, byte [r11 + rcx]	; al = BaseDllName.Buffer[rcx]
+
+		; 	; to upper character
+		; 	cmp al, 0x61 ; compare with 'a'
+		; 	jl .next_char
+		; 	sub al, 0x20 ; al = al - 32 / to upper
+		; 	.next_char:
+
+		; 	ror edx, 13 ; rdx = rdx >> 13
+		; 	movzx rax, al ; rax = al
+		; 	add rdx, rax ; rdx = rdx + rax
+
+
+		; 	inc rcx
+		; 	cmp rcx, r10
+		; 	jnz .loop_hash_dll
+
+
 		; rdx = hash of the dll name
 		mov r11, rdx
 
@@ -215,25 +223,28 @@ _get_proc_address:
 		; rcx = string
 		; rdx = string length
 		; =======
-		; rcx = counter
+		; r8 = counter
+		; r9 = dwModuleHash
+		; =======
+		; return hash of dll∂
 		.ror13_hash_dll:
-			xor rcx, rcx
+			xor r8, r8
 			.loop_hash:
-				mov al, byte [rdi + rcx]	; al = BaseDllName.Buffer[rcx]
+				mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[rcx]
 
 				; to upper character
 				cmp al, 0x61 ; compare with 'a'
-				jl .next_char
+				jl .skip_upper
 				sub al, 0x20 ; al = al - 32 / to upper
-				.next_char:
+				.skip_upper:
 
-				ror edx, 13 ; rdx = rdx >> 13
+				ror r9d, 13 ; rdx = rdx >> 13
 				movzx rax, al ; rax = al
-				add rdx, rax ; rdx = rdx + rax
+				add r9, rax ; rdx = rdx + rax
 
 
-				inc rcx
-				cmp rcx, r10
+				inc r8
+				cmp r8, rdx
 				jnz .loop_hash
 			ret
 
