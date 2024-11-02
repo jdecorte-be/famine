@@ -21,10 +21,8 @@ section .text
 	extern ExitProcess
 
 start:
-    push r12
-    mov rcx, 0x53CABB18
+    mov rcx, 0x945CB1AF
     call _get_proc_address
-    pop r12
     mov r10, rax
 
     xor rax, rax

@@ -36,6 +36,7 @@ section .text
 	global .done
 	global .next_module
 	global _find_hash
+	global .ror13_hash_dll
 
 
 
@@ -45,7 +46,7 @@ _get_proc_address:
     xor rax, rax
     mov rax, gs:[0x60]              ; RAX = Address_of_PEB
     mov rax, [rax + 0x18]           ; RAX = Address_of_LDR
-	mov rbx, [rax + 0x10] ; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
+	mov rbx, [rax + 0x10]			; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
 
     .find_function_loop:
         ; Get _LDR_DATA_TABLE_ENTRY
@@ -60,42 +61,10 @@ _get_proc_address:
 		movzx r10, word [r9 + 0x2] ; r10 = BaseDllName.MaximumLength
 		mov r11, [r9 + 0x8]			; r11 = address of BaseDllName.Buffer
 
-		xor rax, rax
-		xor r9, r9
-		xor rdx, rdx
-
 		mov rcx, r11
 		mov rdx, r10
 		call .ror13_hash_dll ; rax = hash of dll
 		mov r11, rax
-
-
-		; .loop_hash_dll:
-		; 	mov al, byte [r11 + rcx]	; al = BaseDllName.Buffer[rcx]
-
-		; 	; to upper character
-		; 	cmp al, 0x61 ; compare with 'a'
-		; 	jl .next_char
-		; 	sub al, 0x20 ; al = al - 32 / to upper
-		; 	.next_char:
-
-		; 	ror edx, 13 ; rdx = rdx >> 13
-		; 	movzx rax, al ; rax = al
-		; 	add rdx, rax ; rdx = rdx + rax
-
-
-		; 	inc rcx
-		; 	cmp rcx, r10
-		; 	jnz .loop_hash_dll
-
-
-		; rdx = hash of the dll name
-		mov r11, rdx
-
-		xor rcx, rcx
-		xor rax, rax
-		xor r9, r9
-		xor rdx, rdx
 
 		mov r9, [rbx + 0x30] ; r9 = DllBase
 		mov edx, [r9 + 0x3c] ; edx = e_lfanew
@@ -137,73 +106,37 @@ _get_proc_address:
 		; }
 		mov ecx, [r9 + 0x18] ; rcx = pExportTable->NumberOfNames
 		mov eax, [r9 + 0x20] ; rax = pExportTable->AddressOfNames
-		push r9
+		mov r13, r9
 		sub r9, rdx ; r9 = DLLBase
 		mov eax, [r9 + rax] ; rax = pdwFunctionNameBase = (PDWORD)((PCHAR)pModuleBase + pExportDir->AddressOfNames);
 		mov r10, rax ; r10 = pdwFunctionNameBase
 
-		; need : r9, r10
-		xor r8, r8
+
+		; PARAMETERS
+		; DllBase : r9
+		; pExportTable : r13
+		; pExportTable->NumberOfNames : rcx 
 		xor rsi, rsi
 		.loop_function:
 			mov r8, r9
 			add r8, r10 ; r8 = pFunctionName
 
-			xor rax, rax
-			xor rdx, rdx ; hash of the function name
-			xor r12, r12
-			.loop_hash_function:
-				mov al, byte [r8 + r12]
-				cmp al, 0x61
-
-				ror edx, 13 ; rdx = rdx >> 13
-				movzx rax, al ; rax = al
-				add rdx, rax ; rdx = rdx + rax
-
-				inc r12
-				cmp al, 0
-				jnz .loop_hash_function
-
-			add r10, r12
-			mov r12, rdx
+			push r9
+			mov rcx, r8
+			call .ror13_hash_fun
+			pop r9
+			mov r12, rax
+			add r10, r8 ; add len of fun name 
+			
 			add r12, r11
 			cmp edi, r12d
 			jnz .next_function
-			; found function
-			xor rcx, rcx
-			xor r12, r12
-			xor rax, rax
 
-			; usOrdinalTableIndex
-			pop rax
-			mov r12d, [rax + 0x1C]       ; r12 = pExportTable->AddressOfFunctions
-			mov eax, [rax + 0x24]       ; eax = pExportTable->AddressOfNameOrdinals
-
-			add rax, r9               ;	 rax = Absolute address of AddressOfNameOrdinals
-			movzx rax, word [rax + 2 * rsi] ; edx = Ordinal (from AddressOfNameOrdinals)
-
-
-			mov rcx, 4
-			mul rcx
-
-			add rax, r12
-			add rax, r9
-
-			mov ecx, [rax] ; rax = address of function
-			xor rax, rax
-			mov rax, rcx
-			add rax, r9
-
-			xor rbx, rbx
-			xor rcx, rcx
-			xor rdi, rdi
-			xor r8, r8
-			xor r9, r9
-			xor r10, r10
-			xor r11, r11
-			xor r12, r12
-
-			ret
+			; Function found
+			mov rcx, r13
+			mov rdx, r9
+			mov r8, rsi
+			jmp .function_found
 
 			.next_function:
 			inc rsi
@@ -211,7 +144,6 @@ _get_proc_address:
 			jnz .loop_function
 
 		.next_module:
-        ; Move to next module in list
         mov rbx, [rbx]             ; Get next flink
 		mov r9, [rbx + 0x30]       ; Get DllBase from LDR_DATA_TABLE_ENTRY (offset 0x30)
 		test r9, r9                ; If DllBase is NULL, we're done
@@ -219,34 +151,89 @@ _get_proc_address:
 		xor rax, rax ; Return NULL
 		ret
 
-		; PARAMETERS
-		; rcx = string
-		; rdx = string length
-		; =======
-		; r8 = counter
-		; r9 = dwModuleHash
-		; =======
-		; return hash of dll∂
-		.ror13_hash_dll:
-			xor r8, r8
-			.loop_hash:
-				mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[rcx]
+	; PARAMETERS
+	; rcx = pExportTable
+	; rdx = DllBase
+	; r8 = loop counter | i
+	; =======
+	; return address of the function
+	.function_found:
+		mov r12d, [rcx + 0x1C] ; pExportTable->AddressOfFunctions
+		mov eax, [rcx + 0x24] ; pExportTable->AddressOfNameOrdinals
 
-				; to upper character
-				cmp al, 0x61 ; compare with 'a'
-				jl .skip_upper
-				sub al, 0x20 ; al = al - 32 / to upper
-				.skip_upper:
+		add rax, rdx ; rax = DllBase + pExportTable->AddressOfNameOrdinals | RVA
+		movzx rax, word [rax + 2 * r8] 
+		
+		; rax * 4
+		mov rcx, 4
+		imul rax, rcx
 
-				ror r9d, 13 ; rdx = rdx >> 13
-				movzx rax, al ; rax = al
-				add r9, rax ; rdx = rdx + rax
+		add rax, r12
+		add rax, rdx
+
+		mov ecx, [rax]
+		mov rax, rcx
+		add rax, rdx
+
+		ret
 
 
-				inc r8
-				cmp r8, rdx
-				jnz .loop_hash
-			ret
+	; PARAMETERS
+	; rcx = string
+	; rdx = string length
+	; =======
+	; r8 = counter
+	; r9 = dwModuleHash
+	; =======
+	; return hash of dll∂
+	.ror13_hash_dll:
+		xor r8, r8
+		xor r9, r9
+		.loop_hash_dll:
+			mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[rcx]
+
+			; to upper character
+			cmp al, 0x61 ; compare with 'a'
+			jl .skip_upper
+			sub al, 0x20 ; al = al - 32 / to upper
+			.skip_upper:
+
+			ror r9d, 13 ; rdx = rdx >> 13
+			movzx rax, al ; rax = al
+			add r9, rax ; rdx = rdx + rax
+
+
+			inc r8
+			cmp r8, rdx
+			jnz .loop_hash_dll
+		mov rax, r9
+		ret
+
+	; PARAMETERS
+	; rcx = string
+	; =======
+	; r8 = counter
+	; r9 = dwModuleHash
+	; =======
+	; return hash of dll∂
+	.ror13_hash_fun:
+		xor r8, r8
+		xor r9, r9
+		.loop_hash_fun:
+			mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[rcx]
+
+			ror r9d, 13 ; rdx = rdx >> 13
+			movzx rax, al ; rax = al
+			add r9, rax ; rdx = rdx + rax
+
+			inc r8
+			cmp al, 0
+			jnz .loop_hash_fun
+		mov rax, r9
+		ret
+
+
+
 
 
 
