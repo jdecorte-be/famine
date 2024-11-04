@@ -38,6 +38,7 @@ section .text
 	global _find_hash
 	global .ror13_hash_dll
 	global .function_found
+	global .loop_function
 
 
 ; PARAMETERS
@@ -104,7 +105,7 @@ _get_proc_address:
 
 		xor rdx, rdx
 		mov edx, [r15 + 0x20] ; rax = pExportTable->AddressOfNames
-		mov edx, [r14 + rdx] ; rax = pdwFunctionNameBase = (PDWORD)((PCHAR)pModuleBase + pExportDir->AddressOfNames);
+		add rdx, r14 ; rdx = pdwFunctionNameBase
 
 		; NEED
 		; dwNumFunctions -> rcx 
@@ -113,17 +114,19 @@ _get_proc_address:
 		; rdi -> arg1
 		; r8 -> pFunctionName
 		; r9
-		xor rsi, rsi
+		xor r13, r13
+		xor r8, r8
 		.loop_function:
-			mov r8, r14
-			add r8, rdx ; r8 = pFunctionName
+			mov r8d, [rdx]
+			add r8, r14
+			add rdx, 4
 
 			push r9
 			push r8
 			push rcx
 			mov rcx, r8
 			call .ror13_hash_fun
-			add rdx, r8 ; add len of fun name 
+			; add rdx, r8 ; add len of fun name 
 			pop rcx
 			pop r8
 			pop r9
@@ -136,8 +139,8 @@ _get_proc_address:
 			jmp .function_found
 
 			.next_function:
-			inc rsi
-			cmp rcx, rsi
+			inc r13
+			cmp rcx, r13
 			jnz .loop_function
 
 		.next_module:
@@ -152,17 +155,18 @@ _get_proc_address:
 	.function_found:
 		xor rax, rax
 		xor rcx, rcx
+		xor rdx, rdx
 
 		mov eax, [r15 + 0x24] ; pExportTable->AddressOfNameOrdinals
 		add rax, r14
 
-		mov eax, [rax + 2 * rsi]
-		and rax, 0x0FFFFFFF
+		mov dx, [rax + 2 * r13]
+
 
 ; (HMODULE) ((ULONG_PTR) pModuleBase + *(PDWORD)(pModuleBase + pExportDir->AddressOfFunctions + 4 * usOrdinalTableIndex));
 		mov ecx, [r15 + 0x1C]
 		add rcx, r14
-		mov ecx, [rcx + 4 * rax]
+		mov ecx, [rcx + 4 * rdx]
 		and rcx, 0x0FFFFFFF
 
 		xor rax, rax
