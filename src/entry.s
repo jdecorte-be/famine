@@ -21,7 +21,7 @@ section .text
 	extern ExitProcess
 
 start:
-    mov rcx, 0x945CB1AF
+    mov rcx, 0xFD8452C6
     call _get_proc_address
     mov r10, rax
 

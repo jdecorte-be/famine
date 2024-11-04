@@ -37,7 +37,6 @@ section .text
 	global .next_module
 	global _find_hash
 	global .ror13_hash_dll
-	global .function_found
 
 
 ; PARAMETERS
@@ -50,41 +49,49 @@ _get_proc_address:
     xor rax, rax
     mov rax, gs:[0x60]              ; RAX = Address_of_PEB
     mov rax, [rax + 0x18]           ; RAX = Address_of_LDR
-	mov r10, [rax + 0x10]			; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
+	mov rcx, [rax + 0x10]			; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
 
     .find_function_loop:
-		; get pModuleBase -> r14
-		mov r14, [r10 + 0x30]
-
-		; typedef struct _IMAGE_NT_HEADERS {
-		; 	DWORD                   Signature;  // 0x4
-		; 	IMAGE_FILE_HEADER       FileHeader;
-		; 	IMAGE_OPTIONAL_HEADER32 OptionalHeader;
-		; } IMAGE_NT_HEADERS32, *PIMAGE_NT_HEADERS32; // 0x18
-		; get dwExportDirRVA -> r15d
-		mov r15d, [r14 + 0x3c] ; edx = e_lfanew
-		add r15, r14 ; r15 = ntheader
-		add r15, 0x18 ; r15
-		add r15, 0x70
-		mov r15d, [r15]
-		and r15d, 0x0FFFFFFF
-		
-		test r15d, r15d
-		jz .next_module
-
-		; get pExportDir -> r15
-		add r15, r14
+        ; Get _LDR_DATA_TABLE_ENTRY
+        mov r9, rbx                 ; r9 = _LDR_DATA_TABLE_ENTRY
 
 		; typedef struct _UNICODE_STRING {
 		; USHORT Length;				; 2 bytes
 		; USHORT MaximumLength; 		; 2 bytes
 		; PWSTR  Buffer;				; 8 bytes
 		; } UNICODE_STRING, *PUNICODE_STRING;
-		; dllBase + 0x58 = LDR_DATA_TABLE_ENTRY->BaseDllName
-		mov rcx, [r10 + 0x58 + 0x8] ; rcx = BaseDllName.MaximumLength
-		movzx rdx, word [r10 + 0x58 + 0x2] ; rdx = address of BaseDllName.Buffer
+		add r9, 0x58               ; r9 = LDR_DATA_TABLE_ENTRY->BaseDllName
+		movzx r10, word [r9 + 0x2] ; r10 = BaseDllName.MaximumLength
+		mov r11, [r9 + 0x8]			; r11 = address of BaseDllName.Buffer
+
+		mov rcx, r11
+		mov rdx, r10
 		call .ror13_hash_dll ; rax = hash of dll
 		mov r11, rax
+
+		mov r9, [rbx + 0x30] ; r9 = DllBase
+		mov edx, [r9 + 0x3c] ; edx = e_lfanew
+
+		; typedef struct _IMAGE_NT_HEADERS {
+		; 	DWORD                   Signature;  // 0x4
+		; 	IMAGE_FILE_HEADER       FileHeader;
+		; 	IMAGE_OPTIONAL_HEADER32 OptionalHeader;
+		; } IMAGE_NT_HEADERS32, *PIMAGE_NT_HEADERS32; // 0x18
+		add r9, rdx; r9 = NT Header
+		add r9, 0x18 ; r9 + 0x18 = OptionalHeader
+
+		; typedef struct _IMAGE_DATA_DIRECTORY {
+		; DWORD VirtualAddress;
+		; DWORD Size;
+		; } IMAGE_DATA_DIRECTORY, *PIMAGE_DATA_DIRECTORY;
+		add r9, 0x70 ; r9 = IMAGE_DATA_DIRECTORY
+		xor rdx, rdx
+		mov edx, [r9] ; edx = IMAGE_DATA_DIRECTORY.VirtualAddress / dwExportDirRVA
+		test edx, edx
+		jz .next_module		; if dwExportDirRVA == 0, no export directory
+
+		mov r9, [rbx + 0x30] ; r9 = DllBase
+		add r9, rdx ; r9 = DllBase + IMAGE_DATA_DIRECTORY.VirtualAddress / pExportTable
 
 		; public struct IMAGE_EXPORT_DIRECTORY
 		; {
@@ -100,39 +107,38 @@ _get_proc_address:
 		;     public UInt32 AddressOfNames;     // RVA from base of image
 		;     public UInt32 AddressOfNameOrdinals;  // RVA from base of image
 		; }
-		mov ecx, [r15 + 0x18] ; rcx = pExportTable->NumberOfNames
+		mov ecx, [r9 + 0x18] ; rcx = pExportTable->NumberOfNames
+		mov eax, [r9 + 0x20] ; rax = pExportTable->AddressOfNames
+		mov r13, r9
+		sub r9, rdx ; r9 = DLLBase
+		mov eax, [r9 + rax] ; rax = pdwFunctionNameBase = (PDWORD)((PCHAR)pModuleBase + pExportDir->AddressOfNames);
+		mov r10, rax ; r10 = pdwFunctionNameBase
 
-		xor rdx, rdx
-		mov edx, [r15 + 0x20] ; rax = pExportTable->AddressOfNames
-		mov edx, [r14 + rdx] ; rax = pdwFunctionNameBase = (PDWORD)((PCHAR)pModuleBase + pExportDir->AddressOfNames);
 
-		; NEED
-		; dwNumFunctions -> rcx 
-		; pdwFunctionNameBase -> rdx
-		; i -> rsi
-		; rdi -> arg1
-		; r8 -> pFunctionName
-		; r9
+		; PARAMETERS
+		; DllBase : r9
+		; pExportTable : r13
+		; pExportTable->NumberOfNames : rcx 
 		xor rsi, rsi
 		.loop_function:
-			mov r8, r14
-			add r8, rdx ; r8 = pFunctionName
+			mov r8, r9
+			add r8, r10 ; r8 = pFunctionName
 
 			push r9
-			push r8
-			push rcx
 			mov rcx, r8
 			call .ror13_hash_fun
-			add rdx, r8 ; add len of fun name 
-			pop rcx
-			pop r8
 			pop r9
+			mov r12, rax
+			add r10, r8 ; add len of fun name 
 			
-			add rax, r11
-			cmp edi, eax
+			add r12, r11
+			cmp edi, r12d
 			jnz .next_function
 
 			; Function found
+			mov rcx, r13
+			mov rdx, r9
+			mov r8, rsi
 			jmp .function_found
 
 			.next_function:
@@ -141,54 +147,36 @@ _get_proc_address:
 			jnz .loop_function
 
 		.next_module:
-        mov r10, [r10]             ; Get next flink
-
-		test r14, r14                ; If DllBase is NULL, we're done
+        mov rbx, [rbx]             ; Get next flink
+		mov r9, [rbx + 0x30]       ; Get DllBase from LDR_DATA_TABLE_ENTRY (offset 0x30)
+		test r9, r9                ; If DllBase is NULL, we're done
         jnz .find_function_loop
-
 		xor rax, rax ; Return NULL
 		ret
 
+	; PARAMETERS
+	; rcx = pExportTable
+	; rdx = DllBase
+	; r8 = loop counter | i
+	; =======
+	; return address of the function
 	.function_found:
-		xor rax, rax
-		xor rcx, rcx
+		mov r12d, [rcx + 0x1C] ; pExportTable->AddressOfFunctions
+		mov eax, [rcx + 0x24] ; pExportTable->AddressOfNameOrdinals
 
-		mov eax, [r15 + 0x24] ; pExportTable->AddressOfNameOrdinals
-		add rax, r14
-
-		mov eax, [rax + 2 * rsi]
-		and rax, 0x0FFFFFFF
-
-; (HMODULE) ((ULONG_PTR) pModuleBase + *(PDWORD)(pModuleBase + pExportDir->AddressOfFunctions + 4 * usOrdinalTableIndex));
-		mov ecx, [r15 + 0x1C]
-		add rcx, r14
-		mov ecx, [rcx + 4 * rax]
-		and rcx, 0x0FFFFFFF
-
-		xor rax, rax
-		add rax, r14
-		add rax, rcx
-
-
-
-
-
-		; mov r12d, [r15 + 0x1C] ; pExportTable->AddressOfFunctions
-		; mov eax, [r15 + 0x24] ; pExportTable->AddressOfNameOrdinals
-
-		; add rax, rdx ; rax = DllBase + pExportTable->AddressOfNameOrdinals | RVA
-		; movzx rax, word [rax + 2 * r8] 
+		add rax, rdx ; rax = DllBase + pExportTable->AddressOfNameOrdinals | RVA
+		movzx rax, word [rax + 2 * r8] 
 		
-		; ; rax * 4
-		; mov rcx, 4
-		; imul rax, rcx
+		; rax * 4
+		mov rcx, 4
+		imul rax, rcx
 
-		; add rax, r12
-		; add rax, rdx
+		add rax, r12
+		add rax, rdx
 
-		; mov ecx, [rax]
-		; mov rax, rcx
-		; add rax, rdx
+		mov ecx, [rax]
+		mov rax, rcx
+		add rax, rdx
 
 		ret
 
