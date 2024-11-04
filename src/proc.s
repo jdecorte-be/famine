@@ -37,58 +37,54 @@ section .text
 	global .next_module
 	global _find_hash
 	global .ror13_hash_dll
+	global .function_found
 
 
-
+; PARAMETERS
+; rcx = function + dll hash
+; =======
+; return address of the function
 _get_proc_address:
 	mov rdi, rcx
     ; Access PEB
     xor rax, rax
     mov rax, gs:[0x60]              ; RAX = Address_of_PEB
     mov rax, [rax + 0x18]           ; RAX = Address_of_LDR
-	mov rbx, [rax + 0x10]			; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
+	mov r10, [rax + 0x10]			; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
 
     .find_function_loop:
-        ; Get _LDR_DATA_TABLE_ENTRY
-        mov r9, rbx                 ; r9 = _LDR_DATA_TABLE_ENTRY
-
-		; typedef struct _UNICODE_STRING {
-		; USHORT Length;				; 2 bytes
-		; USHORT MaximumLength; 		; 2 bytes
-		; PWSTR  Buffer;				; 8 bytes
-		; } UNICODE_STRING, *PUNICODE_STRING;
-		add r9, 0x58               ; r9 = LDR_DATA_TABLE_ENTRY->BaseDllName
-		movzx r10, word [r9 + 0x2] ; r10 = BaseDllName.MaximumLength
-		mov r11, [r9 + 0x8]			; r11 = address of BaseDllName.Buffer
-
-		mov rcx, r11
-		mov rdx, r10
-		call .ror13_hash_dll ; rax = hash of dll
-		mov r11, rax
-
-		mov r9, [rbx + 0x30] ; r9 = DllBase
-		mov edx, [r9 + 0x3c] ; edx = e_lfanew
+		; get pModuleBase -> r14
+		mov r14, [r10 + 0x30]
 
 		; typedef struct _IMAGE_NT_HEADERS {
 		; 	DWORD                   Signature;  // 0x4
 		; 	IMAGE_FILE_HEADER       FileHeader;
 		; 	IMAGE_OPTIONAL_HEADER32 OptionalHeader;
 		; } IMAGE_NT_HEADERS32, *PIMAGE_NT_HEADERS32; // 0x18
-		add r9, rdx; r9 = NT Header
-		add r9, 0x18 ; r9 + 0x18 = OptionalHeader
+		; get dwExportDirRVA -> r15d
+		mov r15d, [r14 + 0x3c] ; edx = e_lfanew
+		add r15, r14 ; r15 = ntheader
+		add r15, 0x18 ; r15
+		add r15, 0x70
+		mov r15d, [r15]
+		and r15d, 0x0FFFFFFF
+		
+		test r15d, r15d
+		jz .next_module
 
-		; typedef struct _IMAGE_DATA_DIRECTORY {
-		; DWORD VirtualAddress;
-		; DWORD Size;
-		; } IMAGE_DATA_DIRECTORY, *PIMAGE_DATA_DIRECTORY;
-		add r9, 0x70 ; r9 = IMAGE_DATA_DIRECTORY
-		xor rdx, rdx
-		mov edx, [r9] ; edx = IMAGE_DATA_DIRECTORY.VirtualAddress / dwExportDirRVA
-		test edx, edx
-		jz .next_module		; if dwExportDirRVA == 0, no export directory
+		; get pExportDir -> r15
+		add r15, r14
 
-		mov r9, [rbx + 0x30] ; r9 = DllBase
-		add r9, rdx ; r9 = DllBase + IMAGE_DATA_DIRECTORY.VirtualAddress / pExportTable
+		; typedef struct _UNICODE_STRING {
+		; USHORT Length;				; 2 bytes
+		; USHORT MaximumLength; 		; 2 bytes
+		; PWSTR  Buffer;				; 8 bytes
+		; } UNICODE_STRING, *PUNICODE_STRING;
+		; dllBase + 0x58 = LDR_DATA_TABLE_ENTRY->BaseDllName
+		mov rcx, [r10 + 0x58 + 0x8] ; rcx = BaseDllName.MaximumLength
+		movzx rdx, word [r10 + 0x58 + 0x2] ; rdx = address of BaseDllName.Buffer
+		call .ror13_hash_dll ; rax = hash of dll
+		mov r11, rax
 
 		; public struct IMAGE_EXPORT_DIRECTORY
 		; {
@@ -104,37 +100,41 @@ _get_proc_address:
 		;     public UInt32 AddressOfNames;     // RVA from base of image
 		;     public UInt32 AddressOfNameOrdinals;  // RVA from base of image
 		; }
-		mov ecx, [r9 + 0x18] ; rcx = pExportTable->NumberOfNames
-		mov eax, [r9 + 0x20] ; rax = pExportTable->AddressOfNames
-		mov r13, r9
-		sub r9, rdx ; r9 = DLLBase
-		mov eax, [r9 + rax] ; rax = pdwFunctionNameBase = (PDWORD)((PCHAR)pModuleBase + pExportDir->AddressOfNames);
-		mov r10, rax ; r10 = pdwFunctionNameBase
+		mov ecx, [r15 + 0x18] ; rcx = pExportTable->NumberOfNames
 
+		xor rdx, rdx
+		mov edx, [r15 + 0x20] ; rax = pExportTable->AddressOfNames
+		mov edx, [r14 + rdx] ; rax = pdwFunctionNameBase = (PDWORD)((PCHAR)pModuleBase + pExportDir->AddressOfNames);
 
-		; PARAMETERS
-		; DllBase : r9
-		; pExportTable : r13
-		; pExportTable->NumberOfNames : rcx 
+		; NEED
+		; dwNumFunctions -> rcx 
+		; pdwFunctionNameBase -> rdx
+		; i -> rsi
+		; rdi -> arg1
+		; r8 -> pFunctionName
+		; r9
 		xor rsi, rsi
 		.loop_function:
-			mov r8, r9
-			add r8, r10 ; r8 = pFunctionName
+			mov r8, r14
+			add r8, rdx ; r8 = pFunctionName
 
 			push r9
+			push r8
+			push rcx
 			mov rcx, r8
 			call .ror13_hash_fun
+			add rdx, r8 ; add len of fun name 
+			pop rcx
+			pop r8
 			pop r9
-			mov r12, rax
-			add r10, r8 ; add len of fun name 
 			
-			add r12, r11
-			cmp edi, r12d
+			add rax, r11
+			cmp edi, eax
 			jnz .next_function
 
 			; Function found
-			mov rcx, r13
-			mov rdx, r9
+			mov rcx, r15
+			mov rdx, r14
 			mov r8, rsi
 			jmp .function_found
 
@@ -144,10 +144,11 @@ _get_proc_address:
 			jnz .loop_function
 
 		.next_module:
-        mov rbx, [rbx]             ; Get next flink
-		mov r9, [rbx + 0x30]       ; Get DllBase from LDR_DATA_TABLE_ENTRY (offset 0x30)
-		test r9, r9                ; If DllBase is NULL, we're done
+        mov r10, [r10]             ; Get next flink
+
+		test r14, r14                ; If DllBase is NULL, we're done
         jnz .find_function_loop
+
 		xor rax, rax ; Return NULL
 		ret
 
@@ -233,59 +234,3 @@ _get_proc_address:
 		ret
 
 
-
-
-
-
-
-
-
-_get_kernel32_handle:
-; https://bowtiedcrawfish.substack.com/p/understanding-the-peb-and-teb
-; https://dennisbabkin.com/blog/?t=how-to-implement-getprocaddress-in-shellcode
-	xor rdi, rdi            ; RDI = 0x0
-	mul rdi                 ; RAX&RDX =0x0
-	mov rbx, gs:[rax+0x60]  ; RBX = Address_of_PEB
-
-	mov rbx, [rbx+0x18]     ; RBX = Address_of_LDR
-	mov rbx, [rbx+0x20]     ; RBX = 1st entry in InitOrderModuleList / ntdll.dll
-	mov rbx, [rbx]          ; RBX = 2nd entry in InitOrderModuleList / kernelbase.dll
-	mov rbx, [rbx]          ; RBX = 3rd entry in InitOrderModuleList / kernel32.dll
-	mov rbx, [rbx+0x20]     ; RBX = &kernel32.dll ( Base Address of kernel32.dll)
-	mov r8, rbx             ; RBX & R8 = &kernel32.dll
-	ret
-
-_load_dll:
-	;be868d9e8d9d96b3
-	; 9b9e90b3
-	
-
-_init_kernel32_address_table:
-
-	call _get_kernel32_handle ; r8 = 
-
-	; Get kernel32.dll ExportTable Address
-	mov ebx, [rbx+0x3C]     ; RBX = Offset NewEXEHeader
-	add rbx, r8             ; RBX = &kernel32.dll + Offset NewEXEHeader = &NewEXEHeader
-	xor rcx, rcx            ; Avoid null bytes from mov edx,[rbx+0x88] by using rcx register to add
-	add cx, 0x88ff
-	shr rcx, 0x8            ; RCX = 0x88ff --> 0x88
-	mov edx, [rbx+rcx]      ; EDX = [&NewEXEHeader + Offset RVA ExportTable] = RVA ExportTable
-	add rdx, r8             ; RDX = &kernel32.dll + RVA ExportTable = &ExportTable
-
-	; Get &AddressTable from Kernel32.dll ExportTable
-	xor r10, r10
-	mov r10d, [rdx+0x1C]    ; RDI = RVA AddressTable
-	add r10, r8             ; R10 = &AddressTable
-
-	; Get &NamePointerTable from Kernel32.dll ExportTable
-	xor r11, r11
-	mov r11d, [rdx+0x20]    ; R11 = [&ExportTable + Offset RVA Name PointerTable] = RVA NamePointerTable
-	add r11, r8             ; R11 = &NamePointerTable (Memory Address of Kernel32.dll Export NamePointerTable)
-
-	; Get &OrdinalTable from Kernel32.dll ExportTable
-	xor r12, r12
-	mov r12d, [rdx+0x24]    ; R12 = RVA  OrdinalTable
-	add r12, r8             ; R12 = &OrdinalTable
-
-	ret
