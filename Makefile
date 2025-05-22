@@ -1,60 +1,65 @@
-# Executable Name
-NAME = famine.exe
+NAME          =  famine
 
-# Tools
-NASM = nasm
-CL = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64\CL.exe"
+ASM           =  nasm
+ASM64FLAGS    =  -f elf64 -g
+ASM32FLAGS    =  -f elf32 -g
 
-# Directories
-SRC_DIR = src
-OBJ_DIR = obj
-BIN_DIR = bin
+LD            =  ld
 
-# Flags
-ASMFLAGS = -f win64 -w+prefix-seg  # Generate 64-bit Windows object files
-CFLAGS = /c /Fo$(OBJ_DIR)\  # Compile only, no logo, specify output directory
-LINKFLAGS = /Zi /link /ENTRY:start /SUBSYSTEM:CONSOLE /OUT:$(BIN_DIR)\$(NAME) /NOLOGO /NODEFAULTLIB   # Pass linker options using /link
+SRCDIR        =  ./src/
+OBJDIR        =  ./obj/
+PAYLOADDIR    =  ./payloads/
 
-# Source Files
-ASMSRC = $(SRC_DIR)/famine.s
-CSRC = $(wildcard $(SRC_DIR)/c/*.c)
+SRC           =  main.s \
+				 famine.s \
 
-# Object Files
-ASMOBJS = $(patsubst $(SRC_DIR)/%.s,$(OBJ_DIR)/%.obj,$(ASMSRC))
-COBJS = $(patsubst $(SRC_DIR)/c/%.c,$(OBJ_DIR)/%.obj,$(CSRC))
-OBJS = $(ASMOBJS) $(COBJS)
+OBJ           =  ${addprefix $(OBJDIR), $(SRC:%.s=%.o)}
 
-# Commands
-DEL = del /Q
+PAYLOAD_SRC   =  famine.s \
+				 loader.s \
 
-# Rules
-all: dirs $(BIN_DIR)/$(NAME)
+PAYLOADS      =  ${addprefix $(PAYLOADDIR), $(PAYLOAD_SRC:%.s=%.bin)}
 
-dirs:
-	@if not exist $(OBJ_DIR) mkdir $(OBJ_DIR)
-	@if not exist $(BIN_DIR) mkdir $(BIN_DIR)
 
-$(OBJ_DIR)/%.obj: $(SRC_DIR)/%.s
-	@echo Assembling $<
-	$(NASM) $(ASMFLAGS) $< -o $@
+# ===== #
 
-$(OBJ_DIR)/%.obj: $(SRC_DIR)/c/%.c
-	@echo Compiling $<
-	$(CL) $(CFLAGS) $<
 
-$(BIN_DIR)/$(NAME): $(OBJS)
-	@echo Linking...
-	$(CL) $(OBJS) $(LINKFLAGS)
+all:	COPY_PAYLOAD $(NAME)
+
+
+COPY_PAYLOAD: $(PAYLOADDIR) $(PAYLOADS)
+	python3 ./copy_payload.py
+
+
+$(NAME): $(OBJDIR) $(OBJ) $(PAYLOADDIR) $(PAYLOADS)
+	$(LD) $(OBJ) -o $(NAME)
+
 
 clean:
-	@if exist $(OBJ_DIR) $(DEL) $(OBJ_DIR)\*.*
-	@if exist $(BIN_DIR) $(DEL) $(BIN_DIR)\*.*
-
-re: clean all
+	rm -rf $(NAME)
 
 
-run: re
-	@echo Running...
-	$(BIN_DIR)/$(NAME)
+fclean:	clean
+	rm -rf $(OBJDIR) $(PAYLOADDIR)
 
-.PHONY: all clean re dirs
+
+re:	fclean all
+
+
+$(OBJDIR):
+	@mkdir -p $(OBJDIR)
+
+
+$(PAYLOADDIR):
+	@mkdir -p $(PAYLOADDIR)
+
+
+$(OBJDIR)%.o:	$(SRCDIR)%.s
+	$(ASM) $(ASM64FLAGS) $< -o $@ 
+
+
+$(PAYLOADDIR)%.bin:	$(SRCDIR)%.s
+	$(ASM) -f bin $< -o $@
+
+
+.PHONY:	all clean fclean re
